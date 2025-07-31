@@ -1,26 +1,60 @@
-import logging
+import queue
 import sqlite3
-from datetime import datetime, timedelta, timezone
+import threading
+from datetime import datetime, timezone
 from typing import Union, Optional, List, Tuple, Dict
 
 import pandas as pd
 
-# Configuration du logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
+from logger import logger
+from service_bus import ServiceBus
 
 
-class DatabaseManager:
-    """Gère les interactions avec la base de données SQLite."""
+class DatabaseManager(threading.Thread):
+    """Gère les interactions avec la base de données SQLite dans son propre thread."""
 
-    def __init__(self, db_name: str = "crypto_data.db"):
-        self.conn = sqlite3.connect(db_name)
+    def __init__(self, db_name: str = "crypto_data.db", service_bus: Optional[ServiceBus] = None):
+        super().__init__()
+        self.db_name = db_name
+        # On ne crée la connexion qu'au moment de démarrer le thread, dans la méthode run
+        self.conn = None
+        self.cursor = None
+        self.service_bus = service_bus
+        self.work_queue = queue.Queue()
+        self._running = True
+
+    def run(self):
+        """Boucle d'exécution du thread."""
+        self.conn = sqlite3.connect(self.db_name, check_same_thread=False)
         self.cursor = self.conn.cursor()
         self._initialize_tables()
+        logger.info("Thread DatabaseManager démarré.")
+        while self._running:
+            task = self.work_queue.get()
+            if task is None:
+                self._running = False
+                break
+
+            method_name, args, kwargs, result_queue = task
+            try:
+                # Exécute la méthode interne correspondante
+                method = getattr(self, method_name)
+                result = method(*args, **kwargs)
+                if result_queue:
+                    result_queue.put(result)
+            except Exception as e:
+                logger.error(f"Erreur d'exécution de la tâche en base de données ({method_name}): {e}")
+                if result_queue:
+                    result_queue.put(e)  # Envoie l'erreur au thread appelant
+            finally:
+                self.work_queue.task_done()
+        self.close()
+        logger.info("Thread DatabaseManager arrêté.")
+
+    def stop(self):
+        """Arrête le thread en toute sécurité."""
+        self.work_queue.put(None)
+        self.join()
 
     def _initialize_tables(self) -> None:
         """Crée les tables nécessaires si elles n'existent pas."""
@@ -98,15 +132,50 @@ class DatabaseManager:
             logger.error(f"Erreur lors de l'initialisation des tables: {e}")
             raise
 
-    def save_token(self, coin: Dict, session_guid: Optional[str]) -> bool:
-        """Enregistre les métadonnées d'un token."""
+    # Méthodes publiques qui envoient des tâches à la file d'attente
+    def save_token(self, coin: Dict, session_guid: Optional[str]) -> None:
+        self.work_queue.put(('_save_token_task', (coin, session_guid), {}, None))
+
+    def save_prices(self, coin_id_symbol: Tuple[str, str], prices_df: pd.DataFrame,
+                    session_guid: Optional[str]) -> None:
+        self.work_queue.put(('_save_prices_task', (coin_id_symbol, prices_df, session_guid), {}, None))
+
+    def save_rsi(self, coin_id_symbol: Tuple[str, str], rsi_series: pd.Series, session_guid: Optional[str]) -> None:
+        self.work_queue.put(('_save_rsi_task', (coin_id_symbol, rsi_series, session_guid), {}, None))
+
+    def save_correlation(self, coin_id_symbol: Tuple[str, str], run_timestamp: str, correlation: float,
+                         market_cap: float, low_cap_quartile: bool, session_guid: Optional[str]) -> None:
+        self.work_queue.put(('_save_correlation_task', (coin_id_symbol, run_timestamp, correlation, market_cap,
+                                                        low_cap_quartile, session_guid), {}, None))
+
+    def get_prices(self, coin_id_symbol: Tuple[str, str], start_date: datetime, session_guid: Optional[str] = None) -> (
+            Optional)[pd.DataFrame]:
+        """Récupère les prix OHLC depuis la base de manière thread-safe."""
+        result_queue = queue.Queue()
+        self.work_queue.put(('_get_prices_task', (coin_id_symbol, start_date, session_guid), {}, result_queue))
+        result = result_queue.get()
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def get_correlations(self, session_guid: Optional[str] = None) -> List[Tuple]:
+        """Récupère les dernières corrélations de manière thread-safe."""
+        result_queue = queue.Queue()
+        self.work_queue.put(('_get_correlations_task', (session_guid,), {}, result_queue))
+        result = result_queue.get()
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    # Méthodes internes (_get_..._task) exécutées par le thread DatabaseManager
+    def _save_token_task(self, coin: Dict, session_guid: Optional[str]) -> None:
+        # ... (Logique inchangée, elle est déjà thread-safe car exécutée par le thread de la classe)
         coin_id = coin.get('id')
         try:
             if not coin_id:
                 logger.error("Clé 'id' manquante dans le payload du token.")
-                return False
+                return
 
-            # Validation et conversion des types
             def safe_int(value):
                 if value is None:
                     return None
@@ -156,17 +225,9 @@ class DatabaseManager:
                 safe_float(coin.get('atl')),
                 safe_float(coin.get('atl_change_percentage')),
                 safe_str(coin.get('atl_date')),
-                safe_str(coin.get('roi')),  # Convertir roi en chaîne
+                safe_str(coin.get('roi')),
                 safe_str(coin.get('last_updated'))
             )
-
-            # Vérification que toutes les valeurs sont valides
-            logger.debug(f"Valeurs pour insertion du token {coin_id}: {values}")
-            if any(v is None and k in ['coin_id', 'session_guid'] for k, v in
-                   zip(['coin_id', 'session_guid'], values[:2])):
-                logger.error(f"Champs obligatoires manquants pour {coin_id}: coin_id ou session_guid.")
-                return False
-
             self.cursor.execute('''
                 INSERT INTO tokens (
                     coin_id, session_guid, symbol, name, image, current_price, market_cap, market_cap_rank,
@@ -179,27 +240,18 @@ class DatabaseManager:
             ''', values)
             self.conn.commit()
             logger.info(f"Token {coin_id} enregistré avec session_guid={session_guid}.")
-            return True
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement du token {coin_id}: {e}")
-            return False
 
-    def save_prices(self, coin_id_symbol: Tuple[str, str], prices_df: pd.DataFrame,
-                    session_guid: Optional[str]) -> bool:
-        """Enregistre les prix OHLC."""
-
-        coin_id = coin_id_symbol[0]
-        coin_symbol = coin_id_symbol[1]
-
+    def _save_prices_task(self, coin_id_symbol: Tuple[str, str], prices_df: pd.DataFrame,
+                          session_guid: Optional[str]) -> None:
+        """Tâche interne pour enregistrer les prix OHLC."""
+        coin_id, coin_symbol = coin_id_symbol
         try:
             if prices_df.empty:
                 logger.warning(f"DataFrame vide pour {coin_id}, aucune donnée enregistrée.")
-                return False
-            timestamps = [self._ensure_datetime(t) for t in prices_df.index]
-            if any(t is None for t in timestamps):
-                logger.warning(f"Timestamps invalides pour {coin_id}, données ignorées.")
-                return False
-            for i, row in prices_df.iterrows():
+                return
+            for _, row in prices_df.iterrows():
                 # timestamp = timestamps[i]
                 timestamp = row['timestamp']
                 # Convertir en secondes et créer un objet datetime
@@ -209,67 +261,49 @@ class DatabaseManager:
                 self.cursor.execute('''
                     INSERT INTO prices (coin_id, coin_symbol, timestamp, session_guid, open, high, low, close)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (coin_id, coin_symbol, dt.isoformat(), session_guid, row['open'], row['high'], row['low'],
+                ''', (coin_id, coin_symbol, dt, session_guid, row['open'], row['high'], row['low'],
                       row['close']))
             self.conn.commit()
-            return True
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement des prix pour {coin_id}: {e}")
-            return False
 
-    def save_rsi(self, coin_id_symbol: Tuple[str, str], rsi_series: pd.Series, session_guid: Optional[str]) -> bool:
-        """Enregistre les valeurs RSI."""
-
-        coin_id = coin_id_symbol[0]
-        coin_symbol = coin_id_symbol[1]
-
+    def _save_rsi_task(self, coin_id_symbol: Tuple[str, str], rsi_series: pd.Series,
+                       session_guid: Optional[str]) -> None:
+        """Tâche interne pour enregistrer les valeurs RSI."""
+        coin_id, coin_symbol = coin_id_symbol
         try:
             if rsi_series.empty:
                 logger.warning(f"Série RSI vide pour {coin_id}, aucune donnée enregistrée.")
-                return False
-            timestamps = [self._ensure_datetime(t) for t in rsi_series.index]
-            if any(t is None for t in timestamps):
-                logger.warning(f"Timestamps invalides dans RSI pour {coin_id}.")
-                return False
-            for i, rsi in rsi_series.items():
-                if not pd.isna(rsi):
-                    timestamp = timestamps[rsi_series.index.get_loc(i)]
-                    self.cursor.execute('''
-                        INSERT INTO rsi (coin_id, coin_symbol, timestamp, session_guid, rsi)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (coin_id, coin_symbol, timestamp.isoformat(), session_guid, rsi))
+                return
+            for timestamp, rsi_value in rsi_series.items():
+                if not pd.isna(rsi_value):
+                    dt = self._ensure_datetime(timestamp)
+                    if dt:
+                        self.cursor.execute('''
+                            INSERT INTO rsi (coin_id, coin_symbol, timestamp, session_guid, rsi)
+                            VALUES (?, ?, ?, ?, ?)
+                        ''', (coin_id, coin_symbol, dt.isoformat(), session_guid, rsi_value))
             self.conn.commit()
-            return True
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement du RSI pour {coin_id}: {e}")
-            return False
 
-    def save_correlation(self, coin_id_symbol: Tuple[str, str], run_timestamp: str, correlation: float,
-                         market_cap: float,
-                         low_cap_quartile: bool, session_guid: Optional[str]) -> bool:
-        """Enregistre une corrélation."""
-
-        coin_id = coin_id_symbol[0]
-        coin_symbol = coin_id_symbol[1]
-
+    def _save_correlation_task(self, coin_id_symbol: Tuple[str, str], run_timestamp: str, correlation: float,
+                               market_cap: float, low_cap_quartile: bool, session_guid: Optional[str]) -> None:
+        """Tâche interne pour enregistrer une corrélation."""
+        coin_id, coin_symbol = coin_id_symbol
         try:
             self.cursor.execute('''
                 INSERT INTO correlations (coin_id, coin_symbol, run_timestamp, session_guid, correlation, market_cap, low_cap_quartile)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (coin_id, coin_symbol, run_timestamp, session_guid, correlation, market_cap, low_cap_quartile))
             self.conn.commit()
-            return True
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement de la corrélation pour {coin_id}: {e}")
-            return False
 
-    def get_prices(self, coin_id_symbol: Tuple[str, str], start_date: datetime, session_guid: Optional[str] = None) -> (
+    def _get_prices_task(self, coin_id_symbol: Tuple[str, str], start_date: datetime, session_guid: Optional[str]) -> (
             Optional)[pd.DataFrame]:
-        """Récupère les prix OHLC depuis la base."""
-
-        coin_id = coin_id_symbol[0]
-        coin_symbol = coin_id_symbol[1]
-
+        """Tâche interne pour récupérer les prix OHLC depuis la base."""
+        coin_id, coin_symbol = coin_id_symbol
         try:
             self.cursor.execute('''
                 SELECT timestamp, open, high, low, close FROM prices
@@ -284,29 +318,20 @@ class DatabaseManager:
                 columns=['timestamp', 'open', 'high', 'low', 'close'],
                 index=[datetime.fromisoformat(row[0]).astimezone(timezone.utc) for row in rows]
             )
-            if df.empty:
-                logger.warning(f"DataFrame vide pour {coin_id} dans get_prices.")
-                return None
-            time_diffs = df.index.to_series().diff().dropna()
-            expected_diff = timedelta(days=1)
-            if not all((expected_diff - timedelta(hours=1) <= diff <= expected_diff + timedelta(hours=1)) for diff in
-                       time_diffs):
-                logger.warning(f"Incohérence dans les timestamps pour {coin_id}.")
             return df
         except Exception as e:
             logger.error(f"Erreur lors de la récupération des prix pour {coin_id}: {e}")
             return None
 
-    def get_correlations(self, limit: int = 10, session_guid: Optional[str] = None) -> List[Tuple]:
-        """Récupère les dernières corrélations."""
+    def _get_correlations_task(self, session_guid: Optional[str]) -> List[Tuple]:
+        """Tâche interne pour récupérer les dernières corrélations."""
         try:
             self.cursor.execute('''
-                SELECT coin_id, coin_symbol, run_timestamp, correlation, market_cap, low_cap_quartile, session_guid
+                SELECT coin_id, coin_symbol, run_timestamp, correlation, market_cap, low_cap_quartile
                 FROM correlations
                 WHERE session_guid = ?
-                ORDER BY run_timestamp DESC, market_cap DESC
-                LIMIT ?
-            ''', (session_guid, limit,))
+                ORDER BY run_timestamp DESC
+            ''', (session_guid,))
             return self.cursor.fetchall()
         except Exception as e:
             logger.error(f"Erreur lors de la récupération des corrélations: {e}")
@@ -332,6 +357,7 @@ class DatabaseManager:
     def close(self) -> None:
         """Ferme la connexion à la base."""
         try:
-            self.conn.close()
+            if self.conn:
+                self.conn.close()
         except Exception as e:
             logger.error(f"Erreur lors de la fermeture de la base: {e}")
