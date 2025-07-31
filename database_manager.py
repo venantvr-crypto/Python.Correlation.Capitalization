@@ -329,6 +329,7 @@ class DatabaseManager(threading.Thread):
                 return
             for timestamp, rsi_value in rsi_series.items():
                 if not pd.isna(rsi_value):
+                    # noinspection PyUnresolvedReferences
                     dt = timestamp.to_pydatetime().isoformat()
                     self.cursor.execute('''
                         INSERT INTO rsi (coin_id, coin_symbol, timestamp, session_guid, rsi)
