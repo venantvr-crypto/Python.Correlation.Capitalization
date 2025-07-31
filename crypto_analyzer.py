@@ -162,6 +162,7 @@ class CryptoAnalyzer:
             self.results.append(result)
         self._decrement_processing_counter()
 
+    # noinspection PyUnusedLocal
     def _handle_coin_processing_failed(self, event: CoinProcessingFailed):
         self._decrement_processing_counter()
 
@@ -178,6 +179,7 @@ class CryptoAnalyzer:
                     'db_manager': self.db_manager
                 })
 
+    # noinspection PyUnusedLocal
     def _handle_display_completed(self, event: DisplayCompleted):
         self._all_processing_completed.set()
         logger.info("L'analyse, l'affichage et l'arrêt des services sont terminés.")
