@@ -1,0 +1,337 @@
+import logging
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from typing import Union, Optional, List, Tuple, Dict
+
+import pandas as pd
+
+# Configuration du logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
+
+
+class DatabaseManager:
+    """Gère les interactions avec la base de données SQLite."""
+
+    def __init__(self, db_name: str = "crypto_data.db"):
+        self.conn = sqlite3.connect(db_name)
+        self.cursor = self.conn.cursor()
+        self._initialize_tables()
+
+    def _initialize_tables(self) -> None:
+        """Crée les tables nécessaires si elles n'existent pas."""
+        try:
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tokens (
+                    coin_id TEXT,
+                    coin_symbol TEXT,
+                    session_guid TEXT,
+                    symbol TEXT,
+                    name TEXT,
+                    image TEXT,
+                    current_price REAL,
+                    market_cap INTEGER,
+                    market_cap_rank INTEGER,
+                    fully_diluted_valuation INTEGER,
+                    total_volume INTEGER,
+                    high_24h REAL,
+                    low_24h REAL,
+                    price_change_24h REAL,
+                    price_change_percentage_24h REAL,
+                    market_cap_change_24h INTEGER,
+                    market_cap_change_percentage_24h REAL,
+                    circulating_supply REAL,
+                    total_supply REAL,
+                    max_supply REAL,
+                    ath REAL,
+                    ath_change_percentage REAL,
+                    ath_date TEXT,
+                    atl REAL,
+                    atl_change_percentage REAL,
+                    atl_date TEXT,
+                    roi TEXT,
+                    last_updated TEXT,
+                    PRIMARY KEY (coin_id, session_guid)
+                )
+            ''')
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS prices (
+                    coin_id TEXT,
+                    coin_symbol TEXT,
+                    timestamp TIMESTAMP,
+                    session_guid TEXT,
+                    open REAL,
+                    high REAL,
+                    low REAL,
+                    close REAL,
+                    PRIMARY KEY (coin_id, timestamp, session_guid)
+                )
+            ''')
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS rsi (
+                    coin_id TEXT,
+                    coin_symbol TEXT,
+                    timestamp TIMESTAMP,
+                    session_guid TEXT,
+                    rsi REAL,
+                    PRIMARY KEY (coin_id, timestamp, session_guid)
+                )
+            ''')
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS correlations (
+                    coin_id TEXT,
+                    coin_symbol TEXT,
+                    run_timestamp TIMESTAMP,
+                    session_guid TEXT,
+                    correlation REAL,
+                    market_cap REAL,
+                    low_cap_quartile BOOLEAN,
+                    PRIMARY KEY (coin_id, run_timestamp, session_guid)
+                )
+            ''')
+            self.conn.commit()
+        except Exception as e:
+            logger.error(f"Erreur lors de l'initialisation des tables: {e}")
+            raise
+
+    def save_token(self, coin: Dict, session_guid: Optional[str]) -> bool:
+        """Enregistre les métadonnées d'un token."""
+        coin_id = coin.get('id')
+        try:
+            if not coin_id:
+                logger.error("Clé 'id' manquante dans le payload du token.")
+                return False
+
+            # Validation et conversion des types
+            def safe_int(value):
+                if value is None:
+                    return None
+                try:
+                    return int(float(value)) if isinstance(value, (float, str)) else value
+                except (ValueError, TypeError):
+                    logger.warning(f"Conversion en int échouée pour {value}, retour à None.")
+                    return None
+
+            def safe_float(value):
+                if value is None:
+                    return None
+                try:
+                    return float(value) if isinstance(value, (int, str)) else value
+                except (ValueError, TypeError):
+                    logger.warning(f"Conversion en float échouée pour {value}, retour à None.")
+                    return None
+
+            def safe_str(value):
+                if value is None:
+                    return None
+                return str(value)
+
+            values = (
+                coin_id,
+                session_guid,
+                safe_str(coin.get('symbol')),
+                safe_str(coin.get('name')),
+                safe_str(coin.get('image')),
+                safe_float(coin.get('current_price')),
+                safe_int(coin.get('market_cap')),
+                safe_int(coin.get('market_cap_rank')),
+                safe_int(coin.get('fully_diluted_valuation')),
+                safe_int(coin.get('total_volume')),
+                safe_float(coin.get('high_24h')),
+                safe_float(coin.get('low_24h')),
+                safe_float(coin.get('price_change_24h')),
+                safe_float(coin.get('price_change_percentage_24h')),
+                safe_int(coin.get('market_cap_change_24h')),
+                safe_float(coin.get('market_cap_change_percentage_24h')),
+                safe_float(coin.get('circulating_supply')),
+                safe_float(coin.get('total_supply')),
+                safe_float(coin.get('max_supply')),
+                safe_float(coin.get('ath')),
+                safe_float(coin.get('ath_change_percentage')),
+                safe_str(coin.get('ath_date')),
+                safe_float(coin.get('atl')),
+                safe_float(coin.get('atl_change_percentage')),
+                safe_str(coin.get('atl_date')),
+                safe_str(coin.get('roi')),  # Convertir roi en chaîne
+                safe_str(coin.get('last_updated'))
+            )
+
+            # Vérification que toutes les valeurs sont valides
+            logger.debug(f"Valeurs pour insertion du token {coin_id}: {values}")
+            if any(v is None and k in ['coin_id', 'session_guid'] for k, v in
+                   zip(['coin_id', 'session_guid'], values[:2])):
+                logger.error(f"Champs obligatoires manquants pour {coin_id}: coin_id ou session_guid.")
+                return False
+
+            self.cursor.execute('''
+                INSERT INTO tokens (
+                    coin_id, session_guid, symbol, name, image, current_price, market_cap, market_cap_rank,
+                    fully_diluted_valuation, total_volume, high_24h, low_24h, price_change_24h,
+                    price_change_percentage_24h, market_cap_change_24h, market_cap_change_percentage_24h,
+                    circulating_supply, total_supply, max_supply, ath, ath_change_percentage,
+                    ath_date, atl, atl_change_percentage, atl_date, roi, last_updated
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', values)
+            self.conn.commit()
+            logger.info(f"Token {coin_id} enregistré avec session_guid={session_guid}.")
+            return True
+        except Exception as e:
+            logger.error(f"Erreur lors de l'enregistrement du token {coin_id}: {e}")
+            return False
+
+    def save_prices(self, coin_id_symbol: Tuple[str, str], prices_df: pd.DataFrame,
+                    session_guid: Optional[str]) -> bool:
+        """Enregistre les prix OHLC."""
+
+        coin_id = coin_id_symbol[0]
+        coin_symbol = coin_id_symbol[1]
+
+        try:
+            if prices_df.empty:
+                logger.warning(f"DataFrame vide pour {coin_id}, aucune donnée enregistrée.")
+                return False
+            timestamps = [self._ensure_datetime(t) for t in prices_df.index]
+            if any(t is None for t in timestamps):
+                logger.warning(f"Timestamps invalides pour {coin_id}, données ignorées.")
+                return False
+            for i, row in prices_df.iterrows():
+                # timestamp = timestamps[i]
+                timestamp = row['timestamp']
+                # Convertir en secondes et créer un objet datetime
+                dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+                # Formater en ISO 8601
+                # iso_string = dt.isoformat()
+                self.cursor.execute('''
+                    INSERT INTO prices (coin_id, coin_symbol, timestamp, session_guid, open, high, low, close)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (coin_id, coin_symbol, dt.isoformat(), session_guid, row['open'], row['high'], row['low'],
+                      row['close']))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erreur lors de l'enregistrement des prix pour {coin_id}: {e}")
+            return False
+
+    def save_rsi(self, coin_id_symbol: Tuple[str, str], rsi_series: pd.Series, session_guid: Optional[str]) -> bool:
+        """Enregistre les valeurs RSI."""
+
+        coin_id = coin_id_symbol[0]
+        coin_symbol = coin_id_symbol[1]
+
+        try:
+            if rsi_series.empty:
+                logger.warning(f"Série RSI vide pour {coin_id}, aucune donnée enregistrée.")
+                return False
+            timestamps = [self._ensure_datetime(t) for t in rsi_series.index]
+            if any(t is None for t in timestamps):
+                logger.warning(f"Timestamps invalides dans RSI pour {coin_id}.")
+                return False
+            for i, rsi in rsi_series.items():
+                if not pd.isna(rsi):
+                    timestamp = timestamps[rsi_series.index.get_loc(i)]
+                    self.cursor.execute('''
+                        INSERT INTO rsi (coin_id, coin_symbol, timestamp, session_guid, rsi)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (coin_id, coin_symbol, timestamp.isoformat(), session_guid, rsi))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erreur lors de l'enregistrement du RSI pour {coin_id}: {e}")
+            return False
+
+    def save_correlation(self, coin_id_symbol: Tuple[str, str], run_timestamp: str, correlation: float,
+                         market_cap: float,
+                         low_cap_quartile: bool, session_guid: Optional[str]) -> bool:
+        """Enregistre une corrélation."""
+
+        coin_id = coin_id_symbol[0]
+        coin_symbol = coin_id_symbol[1]
+
+        try:
+            self.cursor.execute('''
+                INSERT INTO correlations (coin_id, coin_symbol, run_timestamp, session_guid, correlation, market_cap, low_cap_quartile)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (coin_id, coin_symbol, run_timestamp, session_guid, correlation, market_cap, low_cap_quartile))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Erreur lors de l'enregistrement de la corrélation pour {coin_id}: {e}")
+            return False
+
+    def get_prices(self, coin_id_symbol: Tuple[str, str], start_date: datetime, session_guid: Optional[str] = None) -> (
+            Optional)[pd.DataFrame]:
+        """Récupère les prix OHLC depuis la base."""
+
+        coin_id = coin_id_symbol[0]
+        coin_symbol = coin_id_symbol[1]
+
+        try:
+            self.cursor.execute('''
+                SELECT timestamp, open, high, low, close FROM prices
+                WHERE coin_id = ? AND timestamp >= ? AND session_guid = ?
+                ORDER BY timestamp
+            ''', (coin_id, start_date.isoformat(), session_guid,))
+            rows = self.cursor.fetchall()
+            if not rows:
+                return None
+            df = pd.DataFrame(
+                rows,
+                columns=['timestamp', 'open', 'high', 'low', 'close'],
+                index=[datetime.fromisoformat(row[0]).astimezone(timezone.utc) for row in rows]
+            )
+            if df.empty:
+                logger.warning(f"DataFrame vide pour {coin_id} dans get_prices.")
+                return None
+            time_diffs = df.index.to_series().diff().dropna()
+            expected_diff = timedelta(days=1)
+            if not all((expected_diff - timedelta(hours=1) <= diff <= expected_diff + timedelta(hours=1)) for diff in
+                       time_diffs):
+                logger.warning(f"Incohérence dans les timestamps pour {coin_id}.")
+            return df
+        except Exception as e:
+            logger.error(f"Erreur lors de la récupération des prix pour {coin_id}: {e}")
+            return None
+
+    def get_correlations(self, limit: int = 10, session_guid: Optional[str] = None) -> List[Tuple]:
+        """Récupère les dernières corrélations."""
+        try:
+            self.cursor.execute('''
+                SELECT coin_id, coin_symbol, run_timestamp, correlation, market_cap, low_cap_quartile, session_guid
+                FROM correlations
+                WHERE session_guid = ?
+                ORDER BY run_timestamp DESC, market_cap DESC
+                LIMIT ?
+            ''', (session_guid, limit,))
+            return self.cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Erreur lors de la récupération des corrélations: {e}")
+            return []
+
+    @staticmethod
+    def _ensure_datetime(timestamp: Union[int, float, str, datetime, pd.Timestamp]) -> Optional[datetime]:
+        """Convertit un timestamp en objet datetime UTC."""
+        try:
+            if isinstance(timestamp, datetime):
+                if timestamp.tzinfo is None:
+                    return timestamp.replace(tzinfo=timezone.utc)
+                return timestamp.astimezone(timezone.utc)
+            if isinstance(timestamp, str):
+                return datetime.fromisoformat(timestamp.replace('Z', '+00:00')).astimezone(timezone.utc)
+            if isinstance(timestamp, (int, float)):
+                return datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+            return pd.Timestamp(timestamp).to_pydatetime().replace(tzinfo=timezone.utc)
+        except Exception as e:
+            logger.error(f"Erreur de conversion de timestamp: {timestamp}, {e}")
+            return None
+
+    def close(self) -> None:
+        """Ferme la connexion à la base."""
+        try:
+            self.conn.close()
+        except Exception as e:
+            logger.error(f"Erreur lors de la fermeture de la base: {e}")
