@@ -3,7 +3,28 @@ import queue
 import threading
 from typing import Callable, Any, Dict
 
+from events import RunAnalysisRequested, FetchTopCoinsRequested, TopCoinsFetched, SingleCoinFetched, \
+    CalculateMarketCapThresholdRequested, MarketCapThresholdCalculated, FetchHistoricalPricesRequested, \
+    HistoricalPricesFetched, CalculateRSIRequested, RSICalculated, CorrelationAnalyzed, \
+    CoinProcessingFailed, FinalResultsReady, DisplayCompleted
 from logger import logger
+
+EVENT_SCHEMAS = {
+    "RunAnalysisRequested": RunAnalysisRequested,
+    "FetchTopCoinsRequested": FetchTopCoinsRequested,
+    "TopCoinsFetched": TopCoinsFetched,
+    "SingleCoinFetched": SingleCoinFetched,
+    "CalculateMarketCapThresholdRequested": CalculateMarketCapThresholdRequested,
+    "MarketCapThresholdCalculated": MarketCapThresholdCalculated,
+    "FetchHistoricalPricesRequested": FetchHistoricalPricesRequested,
+    "HistoricalPricesFetched": HistoricalPricesFetched,
+    "CalculateRSIRequested": CalculateRSIRequested,
+    "RSICalculated": RSICalculated,
+    "CorrelationAnalyzed": CorrelationAnalyzed,
+    "CoinProcessingFailed": CoinProcessingFailed,
+    "FinalResultsReady": FinalResultsReady,
+    "DisplayCompleted": DisplayCompleted
+}
 
 
 class ServiceBus(threading.Thread):
@@ -35,11 +56,21 @@ class ServiceBus(threading.Thread):
         subscribers = self._subscribers[event_name]
         if not subscribers:
             logger.warning(f"Aucun abonné pour l'événement '{event_name}'.")
+            return
+
+        try:
+            event_class = EVENT_SCHEMAS.get(event_name)
+            if event_class and isinstance(payload, Dict):
+                validated_payload = event_class(**payload)
+            else:
+                validated_payload = payload
+        except Exception as e:
+            logger.error(f"Erreur de validation du payload pour l'événement '{event_name}': {e}")
+            return
+
         for subscriber in subscribers:
             try:
-                # Le ServiceBus ne fait plus qu'appeler une méthode qui met la tâche dans une file d'attente.
-                # Le travail est ensuite effectué par le thread de la classe abonnée.
-                subscriber(payload)
+                subscriber(validated_payload)
             except Exception as e:
                 logger.error(f"Erreur d'exécution de l'abonné pour '{event_name}': {e}")
 

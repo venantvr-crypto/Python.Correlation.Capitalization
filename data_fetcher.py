@@ -1,13 +1,14 @@
 import queue
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple
 
 import ccxt
 import pandas as pd
 from pycoingecko import CoinGeckoAPI
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
+from events import FetchTopCoinsRequested, FetchHistoricalPricesRequested
 from logger import logger
 from service_bus import ServiceBus
 
@@ -30,14 +31,11 @@ class DataFetcher(threading.Thread):
             self.service_bus.subscribe("FetchTopCoinsRequested", self._handle_fetch_top_coins_requested)
             self.service_bus.subscribe("FetchHistoricalPricesRequested", self._handle_fetch_historical_prices_requested)
 
-    def _handle_fetch_top_coins_requested(self, payload: Dict):
-        n = payload.get('n', 200)
-        self.work_queue.put(('_fetch_top_coins_task', (n,)))
+    def _handle_fetch_top_coins_requested(self, event: FetchTopCoinsRequested):
+        self.work_queue.put(('_fetch_top_coins_task', (event.n, event.session_guid)))
 
-    def _handle_fetch_historical_prices_requested(self, payload: Dict):
-        coin_id_symbol = payload.get('coin_id_symbol')
-        weeks = payload.get('weeks', 52)
-        self.work_queue.put(('_fetch_historical_prices_task', (coin_id_symbol, weeks)))
+    def _handle_fetch_historical_prices_requested(self, event: FetchHistoricalPricesRequested):
+        self.work_queue.put(('_fetch_historical_prices_task', (event.coin_id_symbol, event.weeks, event.session_guid)))
 
     def run(self):
         logger.info("Thread DataFetcher démarré.")
@@ -69,7 +67,7 @@ class DataFetcher(threading.Thread):
         before_sleep=lambda retry_state: logger.warning(
             f"Réessai pour {retry_state.fn.__name__}: tentative {retry_state.attempt_number}")
     )
-    def _fetch_top_coins_task(self, n: int) -> None:
+    def _fetch_top_coins_task(self, n: int, session_guid: str) -> None:
         coins = []
         pages = (n + 99) // 100
         for page in range(1, pages + 1):
@@ -80,8 +78,7 @@ class DataFetcher(threading.Thread):
                 logger.error(f"Erreur lors de la récupération des coins, page {page}: {e}")
                 continue
         if self.service_bus:
-            payload = {'coins': coins[:n], 'session_guid': self.session_guid}
-            self.service_bus.publish("TopCoinsFetched", payload)
+            self.service_bus.publish("TopCoinsFetched", {'coins': coins[:n], 'session_guid': session_guid})
 
     @retry(
         stop=stop_after_attempt(3),
@@ -90,14 +87,15 @@ class DataFetcher(threading.Thread):
         before_sleep=lambda retry_state: logger.warning(
             f"Réessai pour {retry_state.fn.__name__}: tentative {retry_state.attempt_number}")
     )
-    def _fetch_historical_prices_task(self, coin_id_symbol: Tuple[str, str], weeks: int) -> None:
+    def _fetch_historical_prices_task(self, coin_id_symbol: Tuple[str, str], weeks: int, session_guid: str) -> None:
         coin_id, coin_symbol = coin_id_symbol
         symbol = f"{coin_symbol.upper()}/USDT"
         if symbol not in self.symbols:
             logger.warning(f"Symbole {symbol} introuvable sur Binance.")
             if self.service_bus:
                 self.service_bus.publish("HistoricalPricesFetched",
-                                         {'coin_id_symbol': coin_id_symbol, 'prices_df': None})
+                                         {'coin_id_symbol': coin_id_symbol, 'prices_df': None,
+                                          'session_guid': session_guid})
             return
         days = weeks * 7
         end_date = datetime.now(timezone.utc)
@@ -111,5 +109,6 @@ class DataFetcher(threading.Thread):
             index=[datetime.fromtimestamp(x[0] / 1000, tz=timezone.utc) for x in ohlc]
         )
         if self.service_bus:
-            payload = {'coin_id_symbol': coin_id_symbol, 'prices_df': prices_df, 'session_guid': self.session_guid}
-            self.service_bus.publish("HistoricalPricesFetched", payload)
+            self.service_bus.publish("HistoricalPricesFetched",
+                                     {'coin_id_symbol': coin_id_symbol, 'prices_df': prices_df,
+                                      'session_guid': session_guid})

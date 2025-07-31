@@ -1,10 +1,11 @@
 import queue
 import threading
-from typing import Optional, Dict, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
+from events import CalculateRSIRequested
 from logger import logger
 from service_bus import ServiceBus
 
@@ -22,9 +23,8 @@ class RSICalculator(threading.Thread):
         if self.service_bus:
             self.service_bus.subscribe("CalculateRSIRequested", self._handle_calculate_rsi_requested)
 
-    def _handle_calculate_rsi_requested(self, payload: Dict):
-        self.work_queue.put(('_calculate_rsi_task', (payload.get('coin_id_symbol'), payload.get('prices_series'),
-                                                     payload.get('session_guid'))))
+    def _handle_calculate_rsi_requested(self, event: CalculateRSIRequested):
+        self.work_queue.put(('_calculate_rsi_task', (event.coin_id_symbol, event.prices_series, event.session_guid)))
 
     def run(self):
         logger.info("Thread RSICalculator démarré.")
@@ -52,8 +52,9 @@ class RSICalculator(threading.Thread):
     def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: pd.Series,
                             session_guid: Optional[str]) -> None:
         try:
-            if len(data) < self.periods + 1:
+            if data is None or data.empty or len(data) < self.periods + 1:
                 raise ValueError("Données insuffisantes pour calculer le RSI")
+
             data = data[:-1]
             delta = data.diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=self.periods).mean()
@@ -62,9 +63,10 @@ class RSICalculator(threading.Thread):
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
             if self.service_bus:
-                payload = {'coin_id_symbol': coin_id_symbol, 'rsi': rsi, 'session_guid': session_guid}
-                self.service_bus.publish("RSICalculated", payload)
+                self.service_bus.publish("RSICalculated",
+                                         {'coin_id_symbol': coin_id_symbol, 'rsi': rsi, 'session_guid': session_guid})
         except Exception as e:
             logger.error(f"Erreur lors du calcul du RSI pour {coin_id_symbol}: {e}")
             if self.service_bus:
-                self.service_bus.publish("RSICalculated", {'coin_id_symbol': coin_id_symbol, 'rsi': None})
+                self.service_bus.publish("RSICalculated",
+                                         {'coin_id_symbol': coin_id_symbol, 'rsi': None, 'session_guid': session_guid})

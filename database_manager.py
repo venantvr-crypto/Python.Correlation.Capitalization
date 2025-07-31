@@ -6,6 +6,7 @@ from typing import Union, Optional, List, Tuple, Dict
 
 import pandas as pd
 
+from events import SingleCoinFetched, HistoricalPricesFetched, RSICalculated, CorrelationAnalyzed
 from logger import logger
 from service_bus import ServiceBus
 
@@ -31,29 +32,33 @@ class DatabaseManager(threading.Thread):
         self.service_bus.subscribe("RSICalculated", self._handle_rsi_calculated)
         self.service_bus.subscribe("CorrelationAnalyzed", self._handle_correlation_analyzed)
 
-    def _handle_single_coin_fetched(self, payload: Dict):
-        coin = payload.get('coin')
-        session_guid = payload.get('session_guid')
+    def _handle_single_coin_fetched(self, event: SingleCoinFetched):
+        # Accès direct aux attributs de l'objet dataclass
+        coin = event.coin
+        session_guid = event.session_guid
         if coin:
             self.save_token(coin, session_guid)
 
-    def _handle_historical_prices_fetched(self, payload: Dict):
-        coin_id_symbol = payload.get('coin_id_symbol')
-        prices_df = payload.get('prices_df')
-        session_guid = payload.get('session_guid')
+    def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
+        # Accès direct aux attributs de l'objet dataclass
+        coin_id_symbol = event.coin_id_symbol
+        prices_df = event.prices_df
+        session_guid = event.session_guid
         if prices_df is not None:
             self.save_prices(coin_id_symbol, prices_df, session_guid)
 
-    def _handle_rsi_calculated(self, payload: Dict):
-        coin_id_symbol = payload.get('coin_id_symbol')
-        rsi_series = payload.get('rsi')
-        session_guid = payload.get('session_guid')
+    def _handle_rsi_calculated(self, event: RSICalculated):
+        # Accès direct aux attributs de l'objet dataclass
+        coin_id_symbol = event.coin_id_symbol
+        rsi_series = event.rsi
+        session_guid = event.session_guid
         if rsi_series is not None:
             self.save_rsi(coin_id_symbol, rsi_series, session_guid)
 
-    def _handle_correlation_analyzed(self, payload: Dict):
-        result = payload.get('result')
-        session_guid = payload.get('session_guid')
+    def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):
+        # Accès direct aux attributs de l'objet dataclass
+        result = event.result
+        session_guid = event.session_guid
         if result:
             self.save_correlation(
                 (result['coin_id'], result['coin_symbol']),
@@ -71,23 +76,29 @@ class DatabaseManager(threading.Thread):
         self._initialize_tables()
         logger.info("Thread DatabaseManager démarré.")
         while self._running:
-            task = self.work_queue.get()
-            if task is None:
-                self._running = False
-                break
-
-            method_name, args, kwargs, result_queue = task
             try:
-                method = getattr(self, method_name)
-                result = method(*args, **kwargs)
-                if result_queue:
-                    result_queue.put(result)
-            except Exception as e:
-                logger.error(f"Erreur d'exécution de la tâche en base de données ({method_name}): {e}")
-                if result_queue:
-                    result_queue.put(e)
-            finally:
-                self.work_queue.task_done()
+                # Utilisation d'un timeout pour permettre au thread de s'arrêter
+                task = self.work_queue.get(timeout=1)
+                if task is None:
+                    # Signal pour arrêter le thread
+                    self._running = False
+                    break
+
+                method_name, args, kwargs, result_queue = task
+                try:
+                    method = getattr(self, method_name)
+                    result = method(*args, **kwargs)
+                    if result_queue:
+                        result_queue.put(result)
+                except Exception as e:
+                    logger.error(f"Erreur d'exécution de la tâche en base de données ({method_name}): {e}")
+                    if result_queue:
+                        result_queue.put(e)
+                finally:
+                    self.work_queue.task_done()
+            except queue.Empty:
+                # Le thread peut continuer à tourner même si la queue est vide
+                continue
         self.close()
         logger.info("Thread DatabaseManager arrêté.")
 
@@ -287,9 +298,7 @@ class DatabaseManager(threading.Thread):
                 logger.warning(f"DataFrame vide pour {coin_id}, aucune donnée enregistrée.")
                 return
             for timestamp, row in prices_df.iterrows():
-                # Utilise l'index du DataFrame (qui est un objet datetime)
                 dt = timestamp.to_pydatetime()
-                # Formater en ISO 8601 pour la base de données
                 iso_string = dt.isoformat()
                 self.cursor.execute('''
                     INSERT INTO prices (coin_id, coin_symbol, timestamp, session_guid, open, high, low, close)

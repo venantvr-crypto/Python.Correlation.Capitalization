@@ -1,7 +1,8 @@
 import queue
 import threading
-from typing import Dict, Optional
+from typing import Optional
 
+from events import FinalResultsReady
 from logger import logger
 from service_bus import ServiceBus
 
@@ -18,23 +19,22 @@ class DisplayAgent(threading.Thread):
         if self.service_bus:
             self.service_bus.subscribe("FinalResultsReady", self._handle_final_results_ready)
 
-    def _handle_final_results_ready(self, payload: Dict):
+    def _handle_final_results_ready(self, event: FinalResultsReady):
         """Reçoit l'événement et ajoute la tâche à la file d'attente."""
-        self.work_queue.put(payload)
+        self.work_queue.put(event)
 
     def run(self):
         """Boucle d'exécution du thread."""
         logger.info("Thread DisplayAgent démarré.")
         while self._running:
             try:
-                payload = self.work_queue.get(timeout=1)
-                if payload is None:
+                event = self.work_queue.get(timeout=1)
+                if event is None:
                     continue
 
-                self._display_results(payload)
+                self._display_results(event)
                 self.work_queue.task_done()
 
-                # Une fois l'affichage terminé, on publie un événement de fin
                 self.service_bus.publish("DisplayCompleted", {})
 
             except queue.Empty:
@@ -49,12 +49,13 @@ class DisplayAgent(threading.Thread):
         self.work_queue.put(None)
         self.join()
 
-    def _display_results(self, payload: Dict):
+    def _display_results(self, event: FinalResultsReady):
         """Affiche les résultats finaux."""
-        results = payload.get('results', [])
-        weeks = payload.get('weeks', 50)
-        session_guid = payload.get('session_guid')
-        db_manager = payload.get('db_manager')
+        # Accès direct aux attributs de l'objet dataclass
+        results = event.results
+        weeks = event.weeks
+        session_guid = event.session_guid
+        db_manager = event.db_manager
 
         results = sorted(results, key=lambda x: (-abs(x['correlation']), x['market_cap']))
         logger.info(f"\nTokens à faible capitalisation avec forte corrélation RSI avec BTC ({weeks} semaines) :")

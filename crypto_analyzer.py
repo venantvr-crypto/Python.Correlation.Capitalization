@@ -6,6 +6,8 @@ import pandas as pd
 from data_fetcher import DataFetcher
 from database_manager import DatabaseManager
 from display_agent import DisplayAgent
+from events import RunAnalysisRequested, TopCoinsFetched, MarketCapThresholdCalculated, HistoricalPricesFetched, \
+    RSICalculated, CorrelationAnalyzed, CoinProcessingFailed, DisplayCompleted
 from logger import logger
 from market_cap_agent import MarketCapAgent
 from rsi_calculator import RSICalculator
@@ -28,7 +30,7 @@ class CryptoAnalyzer:
         self.btc_rsi: Optional[pd.Series] = None
         self.results: List[Dict] = []
         self._coins_to_process: List[Tuple[str, str]] = []
-        self.coins: List[Dict] = []  # Ajout pour stocker la liste complète des coins
+        self.coins: List[Dict] = []
 
         self._processing_counter = 0
         self._counter_lock = threading.Lock()
@@ -53,21 +55,23 @@ class CryptoAnalyzer:
         self.service_bus.subscribe("CoinProcessingFailed", self._handle_coin_processing_failed)
         self.service_bus.subscribe("DisplayCompleted", self._handle_display_completed)
 
-    def _handle_run_analysis_requested(self, payload: Dict):
+    def _handle_run_analysis_requested(self, event: RunAnalysisRequested):
         logger.info("Démarrage de l'analyse, demande de la liste des top coins.")
-        self.service_bus.publish("FetchTopCoinsRequested", {'n': self.top_n_coins, 'session_guid': self.session_guid})
+        self.service_bus.publish("FetchTopCoinsRequested", {'n': self.top_n_coins, 'session_guid': event.session_guid})
 
-    def _handle_top_coins_fetched(self, payload: Dict):
-        self.coins = payload.get('coins', [])
-        # On passe la liste complète des coins pour que l'agent puisse calculer les market_caps
+    def _handle_top_coins_fetched(self, event: TopCoinsFetched):
+        self.coins = event.coins
+        for coin in self.coins:
+            self.service_bus.publish("SingleCoinFetched", {'coin': coin, 'session_guid': event.session_guid})
+
         self.service_bus.publish("CalculateMarketCapThresholdRequested", {
             'coins': self.coins,
-            'session_guid': self.session_guid
+            'session_guid': event.session_guid
         })
 
-    def _handle_market_cap_threshold_calculated(self, payload: Dict):
-        self.market_caps = payload.get('market_caps', {})
-        self.low_cap_threshold = payload.get('low_cap_threshold', float('inf'))
+    def _handle_market_cap_threshold_calculated(self, event: MarketCapThresholdCalculated):
+        self.market_caps = event.market_caps
+        self.low_cap_threshold = event.low_cap_threshold
         self._coins_to_process = [(coin['id'], coin['symbol']) for coin in self.coins if
                                   coin['symbol'].lower() != 'btc']
 
@@ -75,13 +79,13 @@ class CryptoAnalyzer:
         self.service_bus.publish("FetchHistoricalPricesRequested", {
             'coin_id_symbol': ('bitcoin', 'btc'),
             'weeks': self.weeks,
-            'session_guid': self.session_guid
+            'session_guid': event.session_guid
         })
 
-    def _handle_historical_prices_fetched(self, payload: Dict):
-        coin_id_symbol = payload.get('coin_id_symbol')
-        prices_df = payload.get('prices_df')
-        session_guid = payload.get('session_guid')
+    def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
+        coin_id_symbol = event.coin_id_symbol
+        prices_df = event.prices_df
+        session_guid = event.session_guid
         coin_symbol = coin_id_symbol[1]
 
         if prices_df is None or prices_df.empty:
@@ -95,10 +99,10 @@ class CryptoAnalyzer:
             'session_guid': session_guid
         })
 
-    def _handle_rsi_calculated(self, payload: Dict):
-        coin_id_symbol = payload.get('coin_id_symbol')
-        rsi_series = payload.get('rsi')
-        session_guid = payload.get('session_guid')
+    def _handle_rsi_calculated(self, event: RSICalculated):
+        coin_id_symbol = event.coin_id_symbol
+        rsi_series = event.rsi
+        session_guid = event.session_guid
         coin_symbol = coin_id_symbol[1]
 
         if rsi_series is None or rsi_series.empty:
@@ -152,13 +156,13 @@ class CryptoAnalyzer:
         }
         self.service_bus.publish("CorrelationAnalyzed", {'result': result, 'session_guid': session_guid})
 
-    def _handle_correlation_analyzed(self, payload: Dict):
-        result = payload.get('result')
+    def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):
+        result = event.result
         if result:
             self.results.append(result)
         self._decrement_processing_counter()
 
-    def _handle_coin_processing_failed(self, payload: Dict):
+    def _handle_coin_processing_failed(self, event: CoinProcessingFailed):
         self._decrement_processing_counter()
 
     def _decrement_processing_counter(self):
@@ -174,7 +178,7 @@ class CryptoAnalyzer:
                     'db_manager': self.db_manager
                 })
 
-    def _handle_display_completed(self, payload: Dict):
+    def _handle_display_completed(self, event: DisplayCompleted):
         self._all_processing_completed.set()
         logger.info("L'analyse, l'affichage et l'arrêt des services sont terminés.")
 
