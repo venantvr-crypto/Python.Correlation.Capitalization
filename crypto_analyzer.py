@@ -1,13 +1,13 @@
 import threading
 from typing import Optional, Tuple, List, Dict
 
-import numpy as np
 import pandas as pd
 
 from data_fetcher import DataFetcher
 from database_manager import DatabaseManager
 from display_agent import DisplayAgent
 from logger import logger
+from market_cap_agent import MarketCapAgent
 from rsi_calculator import RSICalculator
 from service_bus import ServiceBus
 
@@ -28,6 +28,7 @@ class CryptoAnalyzer:
         self.btc_rsi: Optional[pd.Series] = None
         self.results: List[Dict] = []
         self._coins_to_process: List[Tuple[str, str]] = []
+        self.coins: List[Dict] = []  # Ajout pour stocker la liste complète des coins
 
         self._processing_counter = 0
         self._counter_lock = threading.Lock()
@@ -38,12 +39,14 @@ class CryptoAnalyzer:
         self.data_fetcher = DataFetcher(session_guid=self.session_guid, service_bus=self.service_bus)
         self.rsi_calculator = RSICalculator(periods=self.rsi_period, service_bus=self.service_bus)
         self.display_agent = DisplayAgent(service_bus=self.service_bus)
+        self.market_cap_agent = MarketCapAgent(service_bus=self.service_bus)
 
         self._setup_event_subscriptions()
 
     def _setup_event_subscriptions(self):
         self.service_bus.subscribe("RunAnalysisRequested", self._handle_run_analysis_requested)
         self.service_bus.subscribe("TopCoinsFetched", self._handle_top_coins_fetched)
+        self.service_bus.subscribe("MarketCapThresholdCalculated", self._handle_market_cap_threshold_calculated)
         self.service_bus.subscribe("HistoricalPricesFetched", self._handle_historical_prices_fetched)
         self.service_bus.subscribe("RSICalculated", self._handle_rsi_calculated)
         self.service_bus.subscribe("CorrelationAnalyzed", self._handle_correlation_analyzed)
@@ -55,16 +58,18 @@ class CryptoAnalyzer:
         self.service_bus.publish("FetchTopCoinsRequested", {'n': self.top_n_coins, 'session_guid': self.session_guid})
 
     def _handle_top_coins_fetched(self, payload: Dict):
-        coins = payload.get('coins', [])
-        for coin in coins:
-            self.service_bus.publish("SingleCoinFetched", {'coin': coin, 'session_guid': self.session_guid})
+        self.coins = payload.get('coins', [])
+        # On passe la liste complète des coins pour que l'agent puisse calculer les market_caps
+        self.service_bus.publish("CalculateMarketCapThresholdRequested", {
+            'coins': self.coins,
+            'session_guid': self.session_guid
+        })
 
-        self._coins_to_process = [(coin['id'], coin['symbol']) for coin in coins if coin['symbol'].lower() != 'btc']
-        self.market_caps = {coin['symbol']: coin['market_cap'] for coin in coins}
-
-        market_caps_values = list(self.market_caps.values())
-        self.low_cap_threshold = np.percentile(market_caps_values, 25) if market_caps_values else float('inf')
-        logger.info(f"Seuil de faible capitalisation (25e percentile): ${self.low_cap_threshold:,.2f}")
+    def _handle_market_cap_threshold_calculated(self, payload: Dict):
+        self.market_caps = payload.get('market_caps', {})
+        self.low_cap_threshold = payload.get('low_cap_threshold', float('inf'))
+        self._coins_to_process = [(coin['id'], coin['symbol']) for coin in self.coins if
+                                  coin['symbol'].lower() != 'btc']
 
         logger.info("Demande des données pour Bitcoin...")
         self.service_bus.publish("FetchHistoricalPricesRequested", {
@@ -170,7 +175,6 @@ class CryptoAnalyzer:
                 })
 
     def _handle_display_completed(self, payload: Dict):
-        """Gère l'événement de fin d'affichage pour déclencher la fermeture."""
         self._all_processing_completed.set()
         logger.info("L'analyse, l'affichage et l'arrêt des services sont terminés.")
 
@@ -180,6 +184,7 @@ class CryptoAnalyzer:
         self.data_fetcher.start()
         self.rsi_calculator.start()
         self.display_agent.start()
+        self.market_cap_agent.start()
 
         self.service_bus.publish("RunAnalysisRequested", {'session_guid': self.session_guid})
 
@@ -190,3 +195,4 @@ class CryptoAnalyzer:
         self.db_manager.stop()
         self.service_bus.stop()
         self.display_agent.stop()
+        self.market_cap_agent.stop()
