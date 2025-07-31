@@ -1,69 +1,56 @@
-# file: service_bus.py
+import collections
 import queue
 import threading
-from typing import Callable, Any, Dict, List
+from typing import Callable, Any, Dict
 
 from logger import logger
 
 
-class ServiceBus:
-    """Implémente un bus de services pour la communication inter-threads."""
+class ServiceBus(threading.Thread):
+    """
+    Un bus de services centralisé et thread-safe qui traite les événements de manière séquentielle.
+    """
 
     def __init__(self):
-        self._subscribers: Dict[str, List[Callable[[Any], None]]] = {}
-        self._event_queue: queue.Queue = queue.Queue()
-        self._thread = threading.Thread(target=self._run)
-        self._running = False
-        self._lock = threading.Lock()
+        super().__init__()
+        self._subscribers: Dict[str, list[Callable]] = collections.defaultdict(list)
+        self._event_queue = queue.Queue()
+        self._running = True
+        logger.info("Service bus créé.")
 
-    def start(self):
-        """Démarre le thread du bus de services."""
-        if not self._running:
-            self._running = True
-            self._thread.start()
-            logger.info("Service bus démarré.")
+    def run(self):
+        """Boucle principale du bus de services pour traiter les événements de manière séquentielle."""
+        logger.info("Service bus démarré.")
+        while self._running:
+            try:
+                event_name, payload = self._event_queue.get(timeout=1)
+                self._dispatch_event(event_name, payload)
+                self._event_queue.task_done()
+            except queue.Empty:
+                continue
+        logger.info("Service bus arrêté.")
+
+    def _dispatch_event(self, event_name: str, payload: Any):
+        """Dispatch les événements aux souscripteurs."""
+        subscribers = self._subscribers[event_name]
+        if not subscribers:
+            logger.warning(f"Aucun abonné pour l'événement '{event_name}'.")
+        for subscriber in subscribers:
+            try:
+                subscriber(payload)
+            except Exception as e:
+                logger.error(f"Erreur d'exécution de l'abonné pour '{event_name}': {e}")
+
+    def subscribe(self, event_name: str, subscriber: Callable):
+        """Abonne une fonction ou une méthode à un événement."""
+        self._subscribers[event_name].append(subscriber)
+        logger.debug(f"Abonné '{subscriber.__name__}' à l'événement '{event_name}'.")
+
+    def publish(self, event_name: str, payload: Any):
+        """Publie un événement dans la file d'attente du bus."""
+        self._event_queue.put((event_name, payload))
 
     def stop(self):
         """Arrête le thread du bus de services."""
-        if self._running:
-            self._running = False
-            self._event_queue.put(None)  # Sentinel value to stop the thread
-            self._thread.join()
-            logger.info("Service bus arrêté.")
-
-    def publish(self, event_name: str, payload: Any):
-        """Publie un événement avec une charge utile."""
-        logger.debug(f"Publication de l'événement: {event_name}")
-        self._event_queue.put({'event_name': event_name, 'payload': payload})
-
-    def subscribe(self, event_name: str, callback: Callable[[Any], None]):
-        """Abonne une fonction à un événement."""
-        with self._lock:
-            if event_name not in self._subscribers:
-                self._subscribers[event_name] = []
-            self._subscribers[event_name].append(callback)
-            logger.info(f"Fonction abonnée à l'événement: {event_name}")
-
-    def _run(self):
-        """Boucle principale pour le traitement des événements."""
-        while self._running:
-            event = self._event_queue.get()
-            if event is None:
-                break
-            event_name = event['event_name']
-            payload = event['payload']
-            self._process_event(event_name, payload)
-            self._event_queue.task_done()
-        logger.info("Boucle du service bus terminée.")
-
-    def _process_event(self, event_name: str, payload: Any):
-        """Traite un événement en appelant les abonnés."""
-        with self._lock:
-            callbacks = self._subscribers.get(event_name, [])
-        if not callbacks:
-            logger.warning(f"Aucun abonné pour l'événement '{event_name}'.")
-        for callback in callbacks:
-            try:
-                callback(payload)
-            except Exception as e:
-                logger.error(f"Erreur lors de l'exécution du callback pour '{event_name}': {e}")
+        self._running = False
+        self.join()

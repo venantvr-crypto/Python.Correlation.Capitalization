@@ -1,7 +1,4 @@
-# File: rsi_calculator.py
-import queue
-import threading
-from typing import Optional, Tuple
+from typing import Optional, Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -10,40 +7,24 @@ from logger import logger
 from service_bus import ServiceBus
 
 
-class RSICalculator(threading.Thread):
-    """Calcule le RSI pour une série de prix dans son propre thread."""
+class RSICalculator:
+    """Calcule le RSI pour une série de prix, réactif aux événements du ServiceBus."""
 
     def __init__(self, periods: int = 14, service_bus: Optional[ServiceBus] = None):
-        super().__init__()
         self.periods = periods
         self.service_bus = service_bus
-        self.work_queue = queue.Queue()
-        self._running = True
 
-    def run(self):
-        """Boucle d'exécution du thread."""
-        logger.info("Thread RSICalculator démarré.")
-        while self._running:
-            task = self.work_queue.get()
-            if task is None:
-                self._running = False
-                break
-            coin_id_symbol, prices_series, session_guid = task
-            self._calculate_rsi_task(coin_id_symbol, prices_series, session_guid)
-            self.work_queue.task_done()
-        logger.info("Thread RSICalculator arrêté.")
+        if self.service_bus:
+            self.service_bus.subscribe("CalculateRSIRequested", self._handle_calculate_rsi_requested)
 
-    def stop(self):
-        """Arrête le thread en toute sécurité."""
-        self.work_queue.put(None)
-        self.join()
+    def _handle_calculate_rsi_requested(self, payload: Dict):
+        coin_id_symbol = payload.get('coin_id_symbol')
+        prices_series = payload.get('prices_series')
+        session_guid = payload.get('session_guid')
+        self._calculate_rsi_task(coin_id_symbol, prices_series, session_guid)
 
-    def calculate(self, coin_id_symbol: Tuple[str, str], prices_series: pd.Series, session_guid: Optional[str]) -> None:
-        self.work_queue.put((coin_id_symbol, prices_series, session_guid))
-
-    def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: pd.Series, session_guid: Optional[str]) -> \
-            Optional[pd.Series]:
-        """Tâche interne pour calculer le RSI en excluant la dernière donnée."""
+    def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: pd.Series,
+                            session_guid: Optional[str]) -> None:
         try:
             if len(data) < self.periods + 1:
                 raise ValueError("Données insuffisantes pour calculer le RSI")
@@ -57,7 +38,7 @@ class RSICalculator(threading.Thread):
             if self.service_bus:
                 payload = {'coin_id_symbol': coin_id_symbol, 'rsi': rsi, 'session_guid': session_guid}
                 self.service_bus.publish("RSICalculated", payload)
-            return rsi
         except Exception as e:
             logger.error(f"Erreur lors du calcul du RSI pour {coin_id_symbol}: {e}")
-            return None
+            if self.service_bus:
+                self.service_bus.publish("RSICalculated", {'coin_id_symbol': coin_id_symbol, 'rsi': None})

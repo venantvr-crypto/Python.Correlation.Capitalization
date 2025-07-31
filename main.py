@@ -1,4 +1,3 @@
-# file: main.py
 import uuid
 
 from crypto_analyzer import CryptoAnalyzer

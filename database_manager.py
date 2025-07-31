@@ -16,12 +16,53 @@ class DatabaseManager(threading.Thread):
     def __init__(self, db_name: str = "crypto_data.db", service_bus: Optional[ServiceBus] = None):
         super().__init__()
         self.db_name = db_name
-        # On ne crée la connexion qu'au moment de démarrer le thread, dans la méthode run
         self.conn = None
         self.cursor = None
         self.service_bus = service_bus
         self.work_queue = queue.Queue()
         self._running = True
+
+        if self.service_bus:
+            self._setup_event_subscriptions()
+
+    def _setup_event_subscriptions(self):
+        self.service_bus.subscribe("SingleCoinFetched", self._handle_single_coin_fetched)
+        self.service_bus.subscribe("HistoricalPricesFetched", self._handle_historical_prices_fetched)
+        self.service_bus.subscribe("RSICalculated", self._handle_rsi_calculated)
+        self.service_bus.subscribe("CorrelationAnalyzed", self._handle_correlation_analyzed)
+
+    def _handle_single_coin_fetched(self, payload: Dict):
+        coin = payload.get('coin')
+        session_guid = payload.get('session_guid')
+        if coin:
+            self.save_token(coin, session_guid)
+
+    def _handle_historical_prices_fetched(self, payload: Dict):
+        coin_id_symbol = payload.get('coin_id_symbol')
+        prices_df = payload.get('prices_df')
+        session_guid = payload.get('session_guid')
+        if prices_df is not None:
+            self.save_prices(coin_id_symbol, prices_df, session_guid)
+
+    def _handle_rsi_calculated(self, payload: Dict):
+        coin_id_symbol = payload.get('coin_id_symbol')
+        rsi_series = payload.get('rsi')
+        session_guid = payload.get('session_guid')
+        if rsi_series is not None:
+            self.save_rsi(coin_id_symbol, rsi_series, session_guid)
+
+    def _handle_correlation_analyzed(self, payload: Dict):
+        result = payload.get('result')
+        session_guid = payload.get('session_guid')
+        if result:
+            self.save_correlation(
+                (result['coin_id'], result['coin_symbol']),
+                datetime.now(timezone.utc).isoformat(),
+                result['correlation'],
+                result['market_cap'],
+                result['low_cap_quartile'],
+                session_guid
+            )
 
     def run(self):
         """Boucle d'exécution du thread."""
@@ -37,7 +78,6 @@ class DatabaseManager(threading.Thread):
 
             method_name, args, kwargs, result_queue = task
             try:
-                # Exécute la méthode interne correspondante
                 method = getattr(self, method_name)
                 result = method(*args, **kwargs)
                 if result_queue:
@@ -45,7 +85,7 @@ class DatabaseManager(threading.Thread):
             except Exception as e:
                 logger.error(f"Erreur d'exécution de la tâche en base de données ({method_name}): {e}")
                 if result_queue:
-                    result_queue.put(e)  # Envoie l'erreur au thread appelant
+                    result_queue.put(e)
             finally:
                 self.work_queue.task_done()
         self.close()
@@ -158,7 +198,7 @@ class DatabaseManager(threading.Thread):
             raise result
         return result
 
-    def get_correlations(self, session_guid: Optional[str] = None) -> List[Tuple]:
+    def get_correlations(self, session_guid: Optional[str]) -> List[Tuple]:
         """Récupère les dernières corrélations de manière thread-safe."""
         result_queue = queue.Queue()
         self.work_queue.put(('_get_correlations_task', (session_guid,), {}, result_queue))
@@ -167,9 +207,7 @@ class DatabaseManager(threading.Thread):
             raise result
         return result
 
-    # Méthodes internes (_get_..._task) exécutées par le thread DatabaseManager
     def _save_token_task(self, coin: Dict, session_guid: Optional[str]) -> None:
-        # ... (Logique inchangée, elle est déjà thread-safe car exécutée par le thread de la classe)
         coin_id = coin.get('id')
         try:
             if not coin_id:
@@ -177,8 +215,7 @@ class DatabaseManager(threading.Thread):
                 return
 
             def safe_int(value):
-                if value is None:
-                    return None
+                if value is None: return None
                 try:
                     return int(float(value)) if isinstance(value, (float, str)) else value
                 except (ValueError, TypeError):
@@ -186,8 +223,7 @@ class DatabaseManager(threading.Thread):
                     return None
 
             def safe_float(value):
-                if value is None:
-                    return None
+                if value is None: return None
                 try:
                     return float(value) if isinstance(value, (int, str)) else value
                 except (ValueError, TypeError):
@@ -195,8 +231,7 @@ class DatabaseManager(threading.Thread):
                     return None
 
             def safe_str(value):
-                if value is None:
-                    return None
+                if value is None: return None
                 return str(value)
 
             values = (
@@ -245,25 +280,24 @@ class DatabaseManager(threading.Thread):
 
     def _save_prices_task(self, coin_id_symbol: Tuple[str, str], prices_df: pd.DataFrame,
                           session_guid: Optional[str]) -> None:
-        """Tâche interne pour enregistrer les prix OHLC."""
+        """Tâche interne pour enregistrer les prix OHLC en utilisant une conversion de timestamp robuste."""
         coin_id, coin_symbol = coin_id_symbol
         try:
             if prices_df.empty:
                 logger.warning(f"DataFrame vide pour {coin_id}, aucune donnée enregistrée.")
                 return
-            for _, row in prices_df.iterrows():
-                # timestamp = timestamps[i]
-                timestamp = row['timestamp']
-                # Convertir en secondes et créer un objet datetime
-                dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
-                # Formater en ISO 8601
-                # iso_string = dt.isoformat()
+            for timestamp, row in prices_df.iterrows():
+                # Utilise l'index du DataFrame (qui est un objet datetime)
+                dt = timestamp.to_pydatetime()
+                # Formater en ISO 8601 pour la base de données
+                iso_string = dt.isoformat()
                 self.cursor.execute('''
                     INSERT INTO prices (coin_id, coin_symbol, timestamp, session_guid, open, high, low, close)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (coin_id, coin_symbol, dt, session_guid, row['open'], row['high'], row['low'],
+                ''', (coin_id, coin_symbol, iso_string, session_guid, row['open'], row['high'], row['low'],
                       row['close']))
             self.conn.commit()
+            logger.info(f"Prix pour {coin_id} enregistrés avec session_guid={session_guid}.")
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement des prix pour {coin_id}: {e}")
 
@@ -277,12 +311,11 @@ class DatabaseManager(threading.Thread):
                 return
             for timestamp, rsi_value in rsi_series.items():
                 if not pd.isna(rsi_value):
-                    dt = self._ensure_datetime(timestamp)
-                    if dt:
-                        self.cursor.execute('''
-                            INSERT INTO rsi (coin_id, coin_symbol, timestamp, session_guid, rsi)
-                            VALUES (?, ?, ?, ?, ?)
-                        ''', (coin_id, coin_symbol, dt.isoformat(), session_guid, rsi_value))
+                    dt = timestamp.to_pydatetime().isoformat()
+                    self.cursor.execute('''
+                        INSERT INTO rsi (coin_id, coin_symbol, timestamp, session_guid, rsi)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (coin_id, coin_symbol, dt, session_guid, rsi_value))
             self.conn.commit()
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement du RSI pour {coin_id}: {e}")
