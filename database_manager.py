@@ -201,7 +201,7 @@ class DatabaseManager(threading.Thread):
 
     def get_prices(self, coin_id_symbol: Tuple[str, str], start_date: datetime, session_guid: Optional[str] = None) -> (
             Optional)[pd.DataFrame]:
-        """Récupère les prix OHLC depuis la base de manière thread-safe."""
+        """Récupère les prix OHLC depuis la base de manière threadsafe."""
         result_queue = queue.Queue()
         self.work_queue.put(('_get_prices_task', (coin_id_symbol, start_date, session_guid), {}, result_queue))
         result = result_queue.get()
@@ -210,7 +210,7 @@ class DatabaseManager(threading.Thread):
         return result
 
     def get_correlations(self, session_guid: Optional[str]) -> List[Tuple]:
-        """Récupère les dernières corrélations de manière thread-safe."""
+        """Récupère les dernières corrélations de manière threadsafe."""
         result_queue = queue.Queue()
         self.work_queue.put(('_get_correlations_task', (session_guid,), {}, result_queue))
         result = result_queue.get()
@@ -226,7 +226,8 @@ class DatabaseManager(threading.Thread):
                 return
 
             def safe_int(value):
-                if value is None: return None
+                if value is None:
+                    return None
                 try:
                     return int(float(value)) if isinstance(value, (float, str)) else value
                 except (ValueError, TypeError):
@@ -234,7 +235,8 @@ class DatabaseManager(threading.Thread):
                     return None
 
             def safe_float(value):
-                if value is None: return None
+                if value is None:
+                    return None
                 try:
                     return float(value) if isinstance(value, (int, str)) else value
                 except (ValueError, TypeError):
@@ -242,7 +244,8 @@ class DatabaseManager(threading.Thread):
                     return None
 
             def safe_str(value):
-                if value is None: return None
+                if value is None:
+                    return None
                 return str(value)
 
             values = (
@@ -298,7 +301,13 @@ class DatabaseManager(threading.Thread):
                 logger.warning(f"DataFrame vide pour {coin_id}, aucune donnée enregistrée.")
                 return
             for timestamp, row in prices_df.iterrows():
-                dt = timestamp.to_pydatetime()
+                # dt = timestamp.to_pydatetime()
+                # timestamp = timestamps[i]
+                timestamp = row['timestamp']
+                # Convertir en secondes et créer un objet datetime
+                dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+                # Formater en ISO 8601
+                # iso_string = dt.isoformat()
                 iso_string = dt.isoformat()
                 self.cursor.execute('''
                     INSERT INTO prices (coin_id, coin_symbol, timestamp, session_guid, open, high, low, close)

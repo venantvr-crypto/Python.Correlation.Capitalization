@@ -29,7 +29,7 @@ EVENT_SCHEMAS = {
 
 class ServiceBus(threading.Thread):
     """
-    Un bus de services centralisé et thread-safe qui traite les événements de manière séquentielle.
+    Un bus de services centralisé et threadsafe qui traite les événements de manière séquentielle.
     """
 
     def __init__(self):
@@ -61,6 +61,7 @@ class ServiceBus(threading.Thread):
         try:
             event_class = EVENT_SCHEMAS.get(event_name)
             if event_class and isinstance(payload, Dict):
+                # noinspection PyArgumentList
                 validated_payload = event_class(**payload)
             else:
                 validated_payload = payload

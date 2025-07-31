@@ -49,6 +49,7 @@ class DisplayAgent(threading.Thread):
         self.work_queue.put(None)
         self.join()
 
+    # noinspection PyMethodMayBeStatic
     def _display_results(self, event: FinalResultsReady):
         """Affiche les résultats finaux."""
         # Accès direct aux attributs de l'objet dataclass
