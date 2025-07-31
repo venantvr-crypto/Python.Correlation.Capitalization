@@ -28,13 +28,11 @@ class CryptoAnalyzer:
         self.results: List[Dict] = []
         self._coins_to_process: List[Tuple[str, str]] = []
 
-        self._processed_coins_count = 0
-        self._total_coins_to_process = 0
-
+        self._processing_counter = 0
+        self._counter_lock = threading.Lock()
         self._all_processing_completed = threading.Event()
 
         self.service_bus = ServiceBus()
-        # On passe le ServiceBus à chaque composant, qui gérera ses propres abonnements.
         self.db_manager = DatabaseManager(service_bus=self.service_bus)
         self.data_fetcher = DataFetcher(session_guid=self.session_guid, service_bus=self.service_bus)
         self.rsi_calculator = RSICalculator(periods=self.rsi_period, service_bus=self.service_bus)
@@ -42,20 +40,18 @@ class CryptoAnalyzer:
         self._setup_event_subscriptions()
 
     def _setup_event_subscriptions(self):
-        """Abonne les méthodes de l'analyseur aux événements du bus."""
         self.service_bus.subscribe("RunAnalysisRequested", self._handle_run_analysis_requested)
         self.service_bus.subscribe("TopCoinsFetched", self._handle_top_coins_fetched)
         self.service_bus.subscribe("HistoricalPricesFetched", self._handle_historical_prices_fetched)
         self.service_bus.subscribe("RSICalculated", self._handle_rsi_calculated)
         self.service_bus.subscribe("CorrelationAnalyzed", self._handle_correlation_analyzed)
+        self.service_bus.subscribe("CoinProcessingFailed", self._handle_coin_processing_failed)
 
     def _handle_run_analysis_requested(self, payload: Dict):
-        """Déclenche la récupération des top coins."""
         logger.info("Démarrage de l'analyse, demande de la liste des top coins.")
         self.service_bus.publish("FetchTopCoinsRequested", {'n': self.top_n_coins, 'session_guid': self.session_guid})
 
     def _handle_top_coins_fetched(self, payload: Dict):
-        """Gère la liste des top coins, publie les événements de demande de prix."""
         coins = payload.get('coins', [])
         for coin in coins:
             self.service_bus.publish("SingleCoinFetched", {'coin': coin, 'session_guid': self.session_guid})
@@ -75,7 +71,6 @@ class CryptoAnalyzer:
         })
 
     def _handle_historical_prices_fetched(self, payload: Dict):
-        """Gère l'événement HistoricalPricesFetched et demande le calcul du RSI."""
         coin_id_symbol = payload.get('coin_id_symbol')
         prices_df = payload.get('prices_df')
         session_guid = payload.get('session_guid')
@@ -83,7 +78,7 @@ class CryptoAnalyzer:
 
         if prices_df is None or prices_df.empty:
             logger.warning(f"Données de prix manquantes pour {coin_symbol}. Le coin ne sera pas analysé.")
-            self._check_completion()
+            self.service_bus.publish("CoinProcessingFailed", {'coin_id_symbol': coin_id_symbol})
             return
 
         self.service_bus.publish("CalculateRSIRequested", {
@@ -93,7 +88,6 @@ class CryptoAnalyzer:
         })
 
     def _handle_rsi_calculated(self, payload: Dict):
-        """Gère l'événement RSICalculated et, si c'est BTC, lance l'analyse des autres coins."""
         coin_id_symbol = payload.get('coin_id_symbol')
         rsi_series = payload.get('rsi')
         session_guid = payload.get('session_guid')
@@ -101,12 +95,12 @@ class CryptoAnalyzer:
 
         if rsi_series is None or rsi_series.empty:
             logger.warning(f"Série RSI manquante pour {coin_symbol}.")
-            self._check_completion()
+            self.service_bus.publish("CoinProcessingFailed", {'coin_id_symbol': coin_id_symbol})
             return
 
         if coin_symbol == 'btc':
             self.btc_rsi = rsi_series
-            self._total_coins_to_process = len(self._coins_to_process)
+            self._processing_counter = len(self._coins_to_process)
             for coin_id, coin_symbol in self._coins_to_process:
                 self.service_bus.publish("FetchHistoricalPricesRequested", {
                     'coin_id_symbol': (coin_id, coin_symbol),
@@ -117,16 +111,15 @@ class CryptoAnalyzer:
             self._analyze_correlation(coin_id_symbol, rsi_series, session_guid)
 
     def _analyze_correlation(self, coin_id_symbol: Tuple[str, str], coin_rsi: pd.Series, session_guid: str):
-        """Calcule la corrélation et publie le résultat."""
         if self.btc_rsi is None:
             logger.warning("RSI de BTC non disponible pour l'analyse. Ignoré.")
-            self._check_completion()
+            self.service_bus.publish("CoinProcessingFailed", {'coin_id_symbol': coin_id_symbol})
             return
 
         common_index_rsi = self.btc_rsi.index.intersection(coin_rsi.index)
         if len(common_index_rsi) < self.rsi_period:
             logger.warning(f"Index commun RSI insuffisant pour {coin_id_symbol[1]}.")
-            self._check_completion()
+            self.service_bus.publish("CoinProcessingFailed", {'coin_id_symbol': coin_id_symbol})
             return
 
         aligned_btc_rsi = self.btc_rsi.loc[common_index_rsi]
@@ -138,7 +131,7 @@ class CryptoAnalyzer:
 
         if pd.isna(correlation) or abs(correlation) < self.correlation_threshold or not low_cap_quartile:
             logger.info(f"Corrélation pour {coin_id_symbol[1]} non pertinente.")
-            self._check_completion()
+            self.service_bus.publish("CoinProcessingFailed", {'coin_id_symbol': coin_id_symbol})
             return
 
         result = {
@@ -151,21 +144,23 @@ class CryptoAnalyzer:
         self.service_bus.publish("CorrelationAnalyzed", {'result': result, 'session_guid': session_guid})
 
     def _handle_correlation_analyzed(self, payload: Dict):
-        """Gère l'événement CorrelationAnalyzed et incrémente le compteur."""
         result = payload.get('result')
         if result:
             self.results.append(result)
-        self._check_completion()
+        self._decrement_processing_counter()
 
-    def _check_completion(self):
-        """Vérifie si toutes les tâches sont terminées et signale l'événement de fin."""
-        self._processed_coins_count += 1
-        if self._processed_coins_count >= self._total_coins_to_process:
-            self._all_processing_completed.set()
-            logger.info(f"Toutes les analyses de corrélation sont terminées.")
+    def _handle_coin_processing_failed(self, payload: Dict):
+        self._decrement_processing_counter()
+
+    def _decrement_processing_counter(self):
+        with self._counter_lock:
+            self._processing_counter -= 1
+            logger.debug(f"Compteur de traitement : {self._processing_counter}")
+            if self._processing_counter <= 0:
+                self._all_processing_completed.set()
+                logger.info("Toutes les analyses de corrélation sont terminées.")
 
     def _print_results(self):
-        """Affiche les résultats finaux."""
         results = sorted(self.results, key=lambda x: (-abs(x['correlation']), x['market_cap']))
         logger.info(f"\nTokens à faible capitalisation avec forte corrélation RSI avec BTC ({self.weeks} semaines) :")
         for result in results:
@@ -183,22 +178,19 @@ class CryptoAnalyzer:
             logger.error(f"Erreur lors de l'affichage des corrélations : {e}")
 
     def run(self) -> None:
-        """Exécute l'analyse complète."""
-        # Démarrage des services
         self.service_bus.start()
         self.db_manager.start()
-        # DataFetcher et RSICalculator ne sont plus des threads eux-mêmes.
+        self.data_fetcher.start()
+        self.rsi_calculator.start()
 
-        # Le thread principal envoie le tout premier événement pour lancer le processus.
         self.service_bus.publish("RunAnalysisRequested", {'session_guid': self.session_guid})
 
-        # Le thread principal attend que tout le traitement soit terminé.
         self._all_processing_completed.wait()
 
-        # Récupération et affichage des résultats.
         self.db_manager.get_correlations(session_guid=self.session_guid)
         self._print_results()
 
-        # Arrêt des services
-        self.service_bus.stop()
+        self.data_fetcher.stop()
+        self.rsi_calculator.stop()
         self.db_manager.stop()
+        self.service_bus.stop()

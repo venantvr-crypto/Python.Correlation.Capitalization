@@ -37,6 +37,8 @@ class ServiceBus(threading.Thread):
             logger.warning(f"Aucun abonné pour l'événement '{event_name}'.")
         for subscriber in subscribers:
             try:
+                # Le ServiceBus ne fait plus qu'appeler une méthode qui met la tâche dans une file d'attente.
+                # Le travail est ensuite effectué par le thread de la classe abonnée.
                 subscriber(payload)
             except Exception as e:
                 logger.error(f"Erreur d'exécution de l'abonné pour '{event_name}': {e}")

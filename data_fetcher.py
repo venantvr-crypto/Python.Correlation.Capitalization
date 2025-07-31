@@ -1,3 +1,5 @@
+import queue
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, Dict
 
@@ -10,16 +12,19 @@ from logger import logger
 from service_bus import ServiceBus
 
 
-class DataFetcher:
-    """Récupère les données de marché, réactif aux événements du ServiceBus."""
+class DataFetcher(threading.Thread):
+    """Récupère les données de marché dans son propre thread."""
 
     def __init__(self, session_guid: Optional[str] = None, service_bus: Optional[ServiceBus] = None):
+        super().__init__()
         self.cg = CoinGeckoAPI()
         self.binance = ccxt.binance()
         self.binance.load_markets()
         self.symbols = self.binance.symbols
         self.session_guid = session_guid
         self.service_bus = service_bus
+        self.work_queue = queue.Queue()
+        self._running = True
 
         if self.service_bus:
             self.service_bus.subscribe("FetchTopCoinsRequested", self._handle_fetch_top_coins_requested)
@@ -27,12 +32,35 @@ class DataFetcher:
 
     def _handle_fetch_top_coins_requested(self, payload: Dict):
         n = payload.get('n', 200)
-        self._fetch_top_coins_task(n)
+        self.work_queue.put(('_fetch_top_coins_task', (n,)))
 
     def _handle_fetch_historical_prices_requested(self, payload: Dict):
         coin_id_symbol = payload.get('coin_id_symbol')
         weeks = payload.get('weeks', 52)
-        self._fetch_historical_prices_task(coin_id_symbol, weeks)
+        self.work_queue.put(('_fetch_historical_prices_task', (coin_id_symbol, weeks)))
+
+    def run(self):
+        logger.info("Thread DataFetcher démarré.")
+        while self._running:
+            try:
+                task = self.work_queue.get(timeout=1)
+                if task is None:
+                    continue
+
+                method_name, args = task
+                method = getattr(self, method_name)
+                method(*args)
+                self.work_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"Erreur d'exécution de la tâche dans DataFetcher: {e}")
+        logger.info("Thread DataFetcher arrêté.")
+
+    def stop(self):
+        self._running = False
+        self.work_queue.put(None)
+        self.join()
 
     @retry(
         stop=stop_after_attempt(3),
@@ -41,7 +69,7 @@ class DataFetcher:
         before_sleep=lambda retry_state: logger.warning(
             f"Réessai pour {retry_state.fn.__name__}: tentative {retry_state.attempt_number}")
     )
-    def _fetch_top_coins_task(self, n: int = 200) -> None:
+    def _fetch_top_coins_task(self, n: int) -> None:
         coins = []
         pages = (n + 99) // 100
         for page in range(1, pages + 1):
@@ -62,7 +90,7 @@ class DataFetcher:
         before_sleep=lambda retry_state: logger.warning(
             f"Réessai pour {retry_state.fn.__name__}: tentative {retry_state.attempt_number}")
     )
-    def _fetch_historical_prices_task(self, coin_id_symbol: Tuple[str, str], weeks: int = 52) -> None:
+    def _fetch_historical_prices_task(self, coin_id_symbol: Tuple[str, str], weeks: int) -> None:
         coin_id, coin_symbol = coin_id_symbol
         symbol = f"{coin_symbol.upper()}/USDT"
         if symbol not in self.symbols:
