@@ -6,6 +6,7 @@ import pandas as pd
 
 from data_fetcher import DataFetcher
 from database_manager import DatabaseManager
+from display_agent import DisplayAgent
 from logger import logger
 from rsi_calculator import RSICalculator
 from service_bus import ServiceBus
@@ -36,6 +37,7 @@ class CryptoAnalyzer:
         self.db_manager = DatabaseManager(service_bus=self.service_bus)
         self.data_fetcher = DataFetcher(session_guid=self.session_guid, service_bus=self.service_bus)
         self.rsi_calculator = RSICalculator(periods=self.rsi_period, service_bus=self.service_bus)
+        self.display_agent = DisplayAgent(service_bus=self.service_bus)
 
         self._setup_event_subscriptions()
 
@@ -46,6 +48,7 @@ class CryptoAnalyzer:
         self.service_bus.subscribe("RSICalculated", self._handle_rsi_calculated)
         self.service_bus.subscribe("CorrelationAnalyzed", self._handle_correlation_analyzed)
         self.service_bus.subscribe("CoinProcessingFailed", self._handle_coin_processing_failed)
+        self.service_bus.subscribe("DisplayCompleted", self._handle_display_completed)
 
     def _handle_run_analysis_requested(self, payload: Dict):
         logger.info("Démarrage de l'analyse, demande de la liste des top coins.")
@@ -100,7 +103,8 @@ class CryptoAnalyzer:
 
         if coin_symbol == 'btc':
             self.btc_rsi = rsi_series
-            self._processing_counter = len(self._coins_to_process)
+            with self._counter_lock:
+                self._processing_counter = len(self._coins_to_process)
             for coin_id, coin_symbol in self._coins_to_process:
                 self.service_bus.publish("FetchHistoricalPricesRequested", {
                     'coin_id_symbol': (coin_id, coin_symbol),
@@ -157,40 +161,32 @@ class CryptoAnalyzer:
             self._processing_counter -= 1
             logger.debug(f"Compteur de traitement : {self._processing_counter}")
             if self._processing_counter <= 0:
-                self._all_processing_completed.set()
                 logger.info("Toutes les analyses de corrélation sont terminées.")
+                self.service_bus.publish("FinalResultsReady", {
+                    'results': self.results,
+                    'weeks': self.weeks,
+                    'session_guid': self.session_guid,
+                    'db_manager': self.db_manager
+                })
 
-    def _print_results(self):
-        results = sorted(self.results, key=lambda x: (-abs(x['correlation']), x['market_cap']))
-        logger.info(f"\nTokens à faible capitalisation avec forte corrélation RSI avec BTC ({self.weeks} semaines) :")
-        for result in results:
-            logger.info(
-                f"Coin: {result['coin_id']}/{result['coin_symbol']}, Correlation RSI: {result['correlation']:.3f}, "
-                f"Market Cap: ${result['market_cap']:,.2f}")
-        logger.info("\nRésumé de l'historique des corrélations :")
-        try:
-            correlations = self.db_manager.get_correlations(session_guid=self.session_guid)
-            for row in correlations:
-                logger.info(
-                    f"Run: {row[2]}, Coin: {row[0]}/{row[1]}, Correlation: {row[3]:.3f}, Market Cap: ${row[4]:,.2f}, "
-                    f"Low Cap Quartile: {row[5]}")
-        except Exception as e:
-            logger.error(f"Erreur lors de l'affichage des corrélations : {e}")
+    def _handle_display_completed(self, payload: Dict):
+        """Gère l'événement de fin d'affichage pour déclencher la fermeture."""
+        self._all_processing_completed.set()
+        logger.info("L'analyse, l'affichage et l'arrêt des services sont terminés.")
 
     def run(self) -> None:
         self.service_bus.start()
         self.db_manager.start()
         self.data_fetcher.start()
         self.rsi_calculator.start()
+        self.display_agent.start()
 
         self.service_bus.publish("RunAnalysisRequested", {'session_guid': self.session_guid})
 
         self._all_processing_completed.wait()
 
-        self.db_manager.get_correlations(session_guid=self.session_guid)
-        self._print_results()
-
         self.data_fetcher.stop()
         self.rsi_calculator.stop()
         self.db_manager.stop()
         self.service_bus.stop()
+        self.display_agent.stop()
