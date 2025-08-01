@@ -104,3 +104,14 @@ class FinalResultsReady:
 class DisplayCompleted:
     """Événement de fin signalant que l'affichage est terminé."""
     pass
+
+
+@dataclass(frozen=True)
+class PrecisionDataFetched:
+    precision_data: List[Dict]
+    session_guid: str
+
+
+@dataclass(frozen=True)
+class FetchPrecisionDataRequested:
+    session_guid: str

@@ -6,7 +6,7 @@ from typing import Union, Optional, List, Tuple, Dict
 
 import pandas as pd
 
-from events import SingleCoinFetched, HistoricalPricesFetched, RSICalculated, CorrelationAnalyzed
+from events import SingleCoinFetched, HistoricalPricesFetched, RSICalculated, CorrelationAnalyzed, PrecisionDataFetched
 from logger import logger
 from service_bus import ServiceBus
 
@@ -31,6 +31,7 @@ class DatabaseManager(threading.Thread):
         self.service_bus.subscribe("HistoricalPricesFetched", self._handle_historical_prices_fetched)
         self.service_bus.subscribe("RSICalculated", self._handle_rsi_calculated)
         self.service_bus.subscribe("CorrelationAnalyzed", self._handle_correlation_analyzed)
+        self.service_bus.subscribe("PrecisionDataFetched", self._handle_precision_data_fetched)
 
     def _handle_single_coin_fetched(self, event: SingleCoinFetched):
         # Accès direct aux attributs de l'objet dataclass
@@ -68,6 +69,39 @@ class DatabaseManager(threading.Thread):
                 result['low_cap_quartile'],
                 session_guid
             )
+
+    def _handle_precision_data_fetched(self, event: PrecisionDataFetched):
+        try:
+            for data in event.precision_data:
+                symbol = data.get('symbol')
+                if not symbol:
+                    logger.error("Clé 'symbol' manquante dans les données de précision.")
+                    continue
+
+                def safe_value(value, default=None):
+                    return value if value is not None else default
+
+                values = (
+                    symbol,
+                    safe_value(data.get('base_asset')),
+                    safe_value(event.session_guid),
+                    safe_value(data.get('active'), False),
+                    safe_value(data.get('base_precision'), 8),
+                    safe_value(data.get('exchange_precision'), 8)
+                )
+                self.cursor.execute('''
+                    INSERT OR REPLACE INTO precision_table (
+                        symbol, base_asset, session_guid, active,
+                        base_precision, exchange_precision
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', values)
+
+            self.conn.commit()
+            logger.info(
+                f"{len(event.precision_data)} enregistrements de précision insérés avec session_guid={event.session_guid}.")
+        except Exception as e:
+            logger.error(f"Erreur lors de l'enregistrement des données de précision: {e}")
 
     def run(self):
         """Boucle d'exécution du thread."""
@@ -178,6 +212,16 @@ class DatabaseManager(threading.Thread):
                     PRIMARY KEY (coin_id, run_timestamp, session_guid)
                 )
             ''')
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS precision_table (
+                    symbol TEXT PRIMARY KEY,
+                    base_asset TEXT NOT NULL,
+                    session_guid TEXT,
+                    active BOOLEAN NOT NULL,
+                    base_precision INTEGER NOT NULL,
+                    exchange_precision INTEGER NOT NULL
+                )
+            ''')
             self.conn.commit()
         except Exception as e:
             logger.error(f"Erreur lors de l'initialisation des tables: {e}")
@@ -198,6 +242,10 @@ class DatabaseManager(threading.Thread):
                          market_cap: float, low_cap_quartile: bool, session_guid: Optional[str]) -> None:
         self.work_queue.put(('_save_correlation_task', (coin_id_symbol, run_timestamp, correlation, market_cap,
                                                         low_cap_quartile, session_guid), {}, None))
+
+    def save_precision_data(self, precision_data: List[Dict], session_guid: Optional[str]) -> None:
+        self.work_queue.put(
+            ('_handle_precision_data_fetched', (PrecisionDataFetched(precision_data, session_guid),), {}, None))
 
     def get_prices(self, coin_id_symbol: Tuple[str, str], start_date: datetime, session_guid: Optional[str] = None) -> (
             Optional)[pd.DataFrame]:
@@ -336,6 +384,7 @@ class DatabaseManager(threading.Thread):
                         VALUES (?, ?, ?, ?, ?)
                     ''', (coin_id, coin_symbol, dt, session_guid, rsi_value))
             self.conn.commit()
+            logger.info(f"RSI pour {coin_id} enregistré avec session_guid={session_guid}.")
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement du RSI pour {coin_id}: {e}")
 
@@ -349,6 +398,7 @@ class DatabaseManager(threading.Thread):
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (coin_id, coin_symbol, run_timestamp, session_guid, correlation, market_cap, low_cap_quartile))
             self.conn.commit()
+            logger.info(f"Corrélation pour {coin_id} enregistrée avec session_guid={session_guid}.")
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement de la corrélation pour {coin_id}: {e}")
 

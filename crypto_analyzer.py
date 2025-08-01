@@ -7,7 +7,7 @@ from data_fetcher import DataFetcher
 from database_manager import DatabaseManager
 from display_agent import DisplayAgent
 from events import RunAnalysisRequested, TopCoinsFetched, MarketCapThresholdCalculated, HistoricalPricesFetched, \
-    RSICalculated, CorrelationAnalyzed, CoinProcessingFailed, DisplayCompleted
+    RSICalculated, CorrelationAnalyzed, CoinProcessingFailed, DisplayCompleted, PrecisionDataFetched
 from logger import logger
 from market_cap_agent import MarketCapAgent
 from rsi_calculator import RSICalculator
@@ -54,10 +54,16 @@ class CryptoAnalyzer:
         self.service_bus.subscribe("CorrelationAnalyzed", self._handle_correlation_analyzed)
         self.service_bus.subscribe("CoinProcessingFailed", self._handle_coin_processing_failed)
         self.service_bus.subscribe("DisplayCompleted", self._handle_display_completed)
+        self.service_bus.subscribe("PrecisionDataFetched", self._handle_precision_data_fetched)
 
     def _handle_run_analysis_requested(self, event: RunAnalysisRequested):
-        logger.info("Démarrage de l'analyse, demande de la liste des top coins.")
+        logger.info("Démarrage de l'analyse, demande des données de précision et de la liste des top coins.")
+        self.service_bus.publish("FetchPrecisionDataRequested", {'session_guid': event.session_guid})
         self.service_bus.publish("FetchTopCoinsRequested", {'n': self.top_n_coins, 'session_guid': event.session_guid})
+
+    def _handle_precision_data_fetched(self, event: PrecisionDataFetched):
+        logger.info(f"Données de précision reçues pour {len(event.precision_data)} paires.")
+        self.db_manager.save_precision_data(event.precision_data, event.session_guid)
 
     def _handle_top_coins_fetched(self, event: TopCoinsFetched):
         self.coins = event.coins

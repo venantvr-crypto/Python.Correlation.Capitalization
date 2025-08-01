@@ -68,6 +68,10 @@ class DataFetcher(threading.Thread):
             f"Réessai pour {retry_state.fn.__name__}: tentative {retry_state.attempt_number}")
     )
     def _fetch_top_coins_task(self, n: int, session_guid: str) -> None:
+
+        # Récupérer toutes les paires de trading disponibles
+        markets = self.binance.load_markets()
+
         coins = []
         pages = (n + 99) // 100
         for page in range(1, pages + 1):
