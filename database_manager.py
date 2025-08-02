@@ -140,10 +140,11 @@ class DatabaseManager(threading.Thread):
             ''')
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS precision_data (
-                    symbol TEXT PRIMARY KEY, quote_asset TEXT NOT NULL, base_asset TEXT NOT NULL,
+                    symbol TEXT, quote_asset TEXT NOT NULL, base_asset TEXT NOT NULL,
                     status TEXT NOT NULL, base_asset_precision INTEGER NOT NULL, step_size REAL NOT NULL,
                     min_qty REAL NOT NULL, tick_size REAL NOT NULL, min_notional REAL NOT NULL,
-                    session_guid TEXT
+                    session_guid TEXT,
+                    PRIMARY KEY (symbol, quote_asset, base_asset, session_guid)
                 )
             ''')
             self.conn.commit()
@@ -294,7 +295,7 @@ class DatabaseManager(threading.Thread):
                     session_guid
                 )
                 self.cursor.execute('''
-                    INSERT OR REPLACE INTO precision_data (
+                    INSERT INTO precision_data (
                         symbol, quote_asset, base_asset, status, base_asset_precision,
                         step_size, min_qty, tick_size, min_notional, session_guid
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

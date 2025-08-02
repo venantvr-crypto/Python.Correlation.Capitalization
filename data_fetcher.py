@@ -91,7 +91,7 @@ class DataFetcher(threading.Thread):
     )
     def _fetch_historical_prices_task(self, coin_id_symbol: Tuple[str, str], weeks: int, session_guid: str) -> None:
         coin_id, coin_symbol = coin_id_symbol
-        symbol = f"{coin_symbol.upper()}/USDT"
+        symbol = f"{coin_symbol.upper()}/USDC"
         if symbol not in self.binance.symbols:
             logger.warning(f"Symbole {symbol} introuvable sur Binance.")
             if self.service_bus:
@@ -123,11 +123,13 @@ class DataFetcher(threading.Thread):
             f"Réessai pour {retry_state.fn.__name__}: tentative {retry_state.attempt_number}")
     )
     def _fetch_precision_data_task(self, session_guid: str) -> None:
+        """Récupère les données de précision pour TOUS les marchés actifs sur Binance."""
         try:
             markets = self.binance.load_markets()
             precision_data = []
             for symbol, market_info in markets.items():
-                if market_info['quote'] == 'USDT' and market_info['active']:
+                # MODIFICATION : On ne filtre plus sur 'USDC', on prend tous les marchés actifs.
+                if market_info.get('active'):
                     # Chercher les filtres PRICE_FILTER et LOT_SIZE
                     lot_size_filter = next((f for f in market_info['info']['filters']
                                             if f['filterType'] == 'LOT_SIZE'), None)
@@ -151,6 +153,7 @@ class DataFetcher(threading.Thread):
                         precision_data.append(data)
 
             if self.service_bus:
+                logger.info(f"Envoi de {len(precision_data)} paires de précision de marché depuis Binance.")
                 self.service_bus.publish("PrecisionDataFetched",
                                          {'precision_data': precision_data, 'session_guid': session_guid})
         except Exception as e:

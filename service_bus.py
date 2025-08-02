@@ -85,6 +85,7 @@ class ServiceBus(threading.Thread):
     def publish(self, event_name: str, payload: Any):
         """Publie un événement dans la file d'attente du bus."""
         self._event_queue.put((event_name, payload))
+        logger.debug(f"Evénement publié '{event_name}'.")
 
     def stop(self):
         """Arrête le thread du bus de services."""
