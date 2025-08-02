@@ -107,11 +107,13 @@ class DisplayCompleted:
 
 
 @dataclass(frozen=True)
-class PrecisionDataFetched:
-    precision_data: List[Dict]
+class FetchPrecisionDataRequested:
+    """Événement de requête pour récupérer les données de précision des marchés."""
     session_guid: str
 
 
 @dataclass(frozen=True)
-class FetchPrecisionDataRequested:
+class PrecisionDataFetched:
+    """Événement indiquant que les données de précision ont été récupérées."""
+    precision_data: List[Dict]
     session_guid: str

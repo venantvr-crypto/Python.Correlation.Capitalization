@@ -6,7 +6,7 @@ from typing import Callable, Any, Dict
 from events import RunAnalysisRequested, FetchTopCoinsRequested, TopCoinsFetched, SingleCoinFetched, \
     CalculateMarketCapThresholdRequested, MarketCapThresholdCalculated, FetchHistoricalPricesRequested, \
     HistoricalPricesFetched, CalculateRSIRequested, RSICalculated, CorrelationAnalyzed, \
-    CoinProcessingFailed, FinalResultsReady, DisplayCompleted
+    CoinProcessingFailed, FinalResultsReady, DisplayCompleted, FetchPrecisionDataRequested, PrecisionDataFetched
 from logger import logger
 
 EVENT_SCHEMAS = {
@@ -23,7 +23,9 @@ EVENT_SCHEMAS = {
     "CorrelationAnalyzed": CorrelationAnalyzed,
     "CoinProcessingFailed": CoinProcessingFailed,
     "FinalResultsReady": FinalResultsReady,
-    "DisplayCompleted": DisplayCompleted
+    "DisplayCompleted": DisplayCompleted,
+    "FetchPrecisionDataRequested": FetchPrecisionDataRequested,
+    "PrecisionDataFetched": PrecisionDataFetched
 }
 
 

@@ -78,23 +78,31 @@ class DatabaseManager(threading.Thread):
                     logger.error("Clé 'symbol' manquante dans les données de précision.")
                     continue
 
-                def safe_value(value, default=None):
-                    return value if value is not None else default
+                # Extraction sécurisée des filtres
+                # filters = data.get('info', {}).get('filters', [])
+                # lot_size_filter = next((f for f in filters if f['filterType'] == 'LOT_SIZE'), {})
+                # price_filter = next((f for f in filters if f['filterType'] == 'PRICE_FILTER'), {})
+                # notional_filter = next((f for f in filters if f['filterType'] == 'NOTIONAL'), {})
 
                 values = (
-                    symbol,
-                    safe_value(data.get('base_asset')),
-                    safe_value(event.session_guid),
-                    safe_value(data.get('active'), False),
-                    safe_value(data.get('base_precision'), 8),
-                    safe_value(data.get('exchange_precision'), 8)
+                    data.get('symbol'),
+                    data.get('quote_asset'),
+                    data.get('base_asset'),
+                    data.get('status'),
+                    data.get('base_asset_precision'),
+                    float(data.get('step_size', '0')),
+                    float(data.get('min_qty', '0')),
+                    float(data.get('tick_size', '0')),
+                    float(data.get('min_notional', '0')),
+                    event.session_guid
                 )
+
                 self.cursor.execute('''
-                    INSERT OR REPLACE INTO precision_table (
-                        symbol, base_asset, session_guid, active,
-                        base_precision, exchange_precision
+                    INSERT OR REPLACE INTO precision_data (
+                        symbol, quote_asset, base_asset, status,
+                        base_asset_precision, step_size, min_qty, tick_size, min_notional, session_guid
                     )
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', values)
 
             self.conn.commit()
@@ -213,13 +221,17 @@ class DatabaseManager(threading.Thread):
                 )
             ''')
             self.cursor.execute('''
-                CREATE TABLE IF NOT EXISTS precision_table (
+                CREATE TABLE IF NOT EXISTS precision_data (
                     symbol TEXT PRIMARY KEY,
+                    quote_asset TEXT NOT NULL,
                     base_asset TEXT NOT NULL,
-                    session_guid TEXT,
-                    active BOOLEAN NOT NULL,
-                    base_precision INTEGER NOT NULL,
-                    exchange_precision INTEGER NOT NULL
+                    status TEXT NOT NULL,
+                    base_asset_precision INTEGER NOT NULL,
+                    step_size REAL NOT NULL,
+                    min_qty REAL NOT NULL,
+                    tick_size REAL NOT NULL,
+                    min_notional REAL NOT NULL,
+                    session_guid TEXT
                 )
             ''')
             self.conn.commit()

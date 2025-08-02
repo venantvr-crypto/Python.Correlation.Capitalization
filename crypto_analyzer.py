@@ -35,6 +35,7 @@ class CryptoAnalyzer:
         self._processing_counter = 0
         self._counter_lock = threading.Lock()
         self._all_processing_completed = threading.Event()
+        self.precision_data = {}
 
         self.service_bus = ServiceBus()
         self.db_manager = DatabaseManager(service_bus=self.service_bus)
@@ -58,12 +59,14 @@ class CryptoAnalyzer:
 
     def _handle_run_analysis_requested(self, event: RunAnalysisRequested):
         logger.info("Démarrage de l'analyse, demande des données de précision et de la liste des top coins.")
+        # Publie les deux requêtes de manière asynchrone
         self.service_bus.publish("FetchPrecisionDataRequested", {'session_guid': event.session_guid})
         self.service_bus.publish("FetchTopCoinsRequested", {'n': self.top_n_coins, 'session_guid': event.session_guid})
 
     def _handle_precision_data_fetched(self, event: PrecisionDataFetched):
         logger.info(f"Données de précision reçues pour {len(event.precision_data)} paires.")
-        self.db_manager.save_precision_data(event.precision_data, event.session_guid)
+        # Stocke les données de précision en interne, l'enregistrement en BDD est géré par le DatabaseManager
+        self.precision_data = {item['symbol']: item for item in event.precision_data}
 
     def _handle_top_coins_fetched(self, event: TopCoinsFetched):
         self.coins = event.coins
@@ -185,7 +188,6 @@ class CryptoAnalyzer:
                     'db_manager': self.db_manager
                 })
 
-    # noinspection PyUnusedLocal
     def _handle_display_completed(self, event: DisplayCompleted):
         self._all_processing_completed.set()
         logger.info("L'analyse, l'affichage et l'arrêt des services sont terminés.")
