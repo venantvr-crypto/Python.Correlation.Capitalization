@@ -137,10 +137,6 @@ class DataFetcher(threading.Thread):
                                             if f['filterType'] == 'NOTIONAL'), None)
 
                     if lot_size_filter and price_filter and notional_filter:
-
-                        if not market_info['quote']:
-                            stop = True
-
                         data = {
                             'symbol': market_info['symbol'],
                             'quote_asset': market_info['quote'],

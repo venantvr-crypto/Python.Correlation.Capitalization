@@ -65,7 +65,7 @@ class DisplayAgent(threading.Thread):
                 f"Coin: {result['coin_id']}/{result['coin_symbol']}, Correlation RSI: {result['correlation']:.3f}, "
                 f"Market Cap: ${result['market_cap']:,.2f}")
 
-        logger.info("\nRésumé de l'historique des corrélations :")
+        logger.info("Résumé de l'historique des corrélations :")
         try:
             if db_manager and session_guid:
                 correlations = db_manager.get_correlations(session_guid=session_guid)
