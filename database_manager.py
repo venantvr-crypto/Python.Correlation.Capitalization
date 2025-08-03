@@ -108,7 +108,7 @@ class DatabaseManager(threading.Thread):
         try:
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS tokens (
-                    coin_id TEXT, session_guid TEXT, symbol TEXT, name TEXT, image TEXT,
+                    coin_id TEXT, coin_symbol TEXT, session_guid TEXT, symbol TEXT, name TEXT, image TEXT,
                     current_price REAL, market_cap INTEGER, market_cap_rank INTEGER,
                     fully_diluted_valuation INTEGER, total_volume INTEGER, high_24h REAL, low_24h REAL,
                     price_change_24h REAL, price_change_percentage_24h REAL, market_cap_change_24h INTEGER,
@@ -199,8 +199,7 @@ class DatabaseManager(threading.Thread):
                 return str(value) if value is not None else None
 
             values = (
-                coin_id,
-                session_guid, safe_str(coin.get('symbol')), safe_str(coin.get('name')),
+                coin_id, session_guid, safe_str(coin.get('symbol')), safe_str(coin.get('name')),
                 safe_str(coin.get('image')), safe_float(coin.get('current_price')),
                 safe_int(coin.get('market_cap')), safe_int(coin.get('market_cap_rank')),
                 safe_int(coin.get('fully_diluted_valuation')), safe_int(coin.get('total_volume')),
