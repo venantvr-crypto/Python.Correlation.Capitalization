@@ -18,12 +18,14 @@ class CryptoAnalyzer:
     """Orchestre l'analyse des corrélations RSI pour le scalping, piloté par les événements."""
 
     def __init__(self, weeks: int = 50, top_n_coins: int = 200, correlation_threshold: float = 0.7,
-                 rsi_period: int = 14, session_guid: Optional[str] = None, min_correlation_samples: int = 30):
+                 rsi_period: int = 14, session_guid: Optional[str] = None, min_correlation_samples: int = 30,
+                 quote_currencies: List[str] = None):
         self.weeks = weeks
         self.top_n_coins = top_n_coins
         self.correlation_threshold = correlation_threshold
         self.rsi_period = rsi_period
         self.min_correlation_samples = min_correlation_samples
+        self.quote_currencies = quote_currencies if quote_currencies is not None else ['USDC']
         self.session_guid = session_guid
         self.market_caps: Dict[str, float] = {}
         self.low_cap_threshold: float = float('inf')
@@ -44,7 +46,9 @@ class CryptoAnalyzer:
         # Initialisation des composants
         self.service_bus = ServiceBus()
         self.db_manager = DatabaseManager(service_bus=self.service_bus)
-        self.data_fetcher = DataFetcher(session_guid=self.session_guid, service_bus=self.service_bus)
+        self.data_fetcher = DataFetcher(session_guid=self.session_guid,
+                                        service_bus=self.service_bus,
+                                        quote_currencies=self.quote_currencies)
         self.rsi_calculator = RSICalculator(periods=self.rsi_period, service_bus=self.service_bus)
         self.display_agent = DisplayAgent(service_bus=self.service_bus)
         self.market_cap_agent = MarketCapAgent(service_bus=self.service_bus)
@@ -91,16 +95,18 @@ class CryptoAnalyzer:
 
         logger.info("Données de précision et top coins reçus. Démarrage du filtrage des paires USDC.")
 
-        usdc_base_symbols = {
-            m['base_asset'] for m in self.precision_data.values() if m['quote_asset'] == 'USDC'
+        valid_base_symbols = {
+            m['base_asset'] for m in self.precision_data.values() if m['quote_asset'] in self.quote_currencies
         }
 
         original_coin_count = len(self.coins)
         self.coins = [
-            c for c in self.coins if c.get('symbol', '').upper() in usdc_base_symbols
+            c for c in self.coins if c.get('symbol', '').upper() in valid_base_symbols
         ]
+
         logger.info(
-            f"Filtrage des top coins : {original_coin_count} -> {len(self.coins)} ayant une paire USDC sur Binance.")
+            f"Filtrage des top coins : {original_coin_count} -> {len(self.coins)} ayant une paire avec "
+            f"{', '.join(self.quote_currencies)} sur Binance.")
 
         for coin in self.coins:
             self.service_bus.publish("SingleCoinFetched", {'coin': coin, 'session_guid': self.session_guid})
@@ -111,17 +117,18 @@ class CryptoAnalyzer:
         })
 
     def _handle_market_cap_threshold_calculated(self, event: MarketCapThresholdCalculated):
-        """Stocke les données de capitalisation et lance la récupération des prix de BTC."""
+        """Stocke les données de capitalisation et lance la récupération des prix de BTC en USDC uniquement."""
         self.market_caps = event.market_caps
         self.low_cap_threshold = event.low_cap_threshold
         self._coins_to_process = [(coin['id'], coin['symbol']) for coin in self.coins if
                                   coin['symbol'].lower() != 'btc']
 
-        logger.info("Demande des données pour Bitcoin...")
+        logger.info("Demande des données pour Bitcoin (en USDC) comme référence...")
         self.service_bus.publish("FetchHistoricalPricesRequested", {
             'coin_id_symbol': ('bitcoin', 'btc'),
             'weeks': self.weeks,
-            'session_guid': event.session_guid
+            'session_guid': event.session_guid,
+            'quote_currencies_override': ['USDC']
         })
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
@@ -143,7 +150,7 @@ class CryptoAnalyzer:
         })
 
     def _handle_rsi_calculated(self, event: RSICalculated):
-        """Traite le RSI calculé : stocke celui de BTC ou lance l'analyse de corrélation."""
+        """Traite le RSI : stocke celui de BTC/USDC, puis lance l'analyse pour les autres."""
         coin_id_symbol = event.coin_id_symbol
         rsi_series = event.rsi
         session_guid = event.session_guid
@@ -151,20 +158,35 @@ class CryptoAnalyzer:
 
         if rsi_series is None or rsi_series.empty:
             logger.warning(f"Série RSI manquante pour {coin_symbol}.")
-            self.service_bus.publish("CoinProcessingFailed", {'coin_id_symbol': coin_id_symbol})
-            return
+            if coin_symbol == 'btc':
+                logger.error("Impossible de récupérer le RSI de référence pour BTC. Arrêt de l'analyse.")
+                self._all_processing_completed.set()
+                return
+            else:
+                self.service_bus.publish("CoinProcessingFailed", {'coin_id_symbol': coin_id_symbol})
+                return
 
         if coin_symbol == 'btc':
+            logger.info("RSI de référence pour BTC/USDC calculé et stocké.")
             self.btc_rsi = rsi_series
             with self._counter_lock:
                 self._processing_counter = len(self._coins_to_process)
+
+            if not self._coins_to_process:
+                logger.info("Aucun autre coin à traiter. Fin de l'analyse.")
+                self._decrement_processing_counter()
+                return
+
+            logger.info(f"Lancement de la récupération des prix pour les {len(self._coins_to_process)} autres coins...")
             for coin_id, symbol in self._coins_to_process:
                 self.service_bus.publish("FetchHistoricalPricesRequested", {
                     'coin_id_symbol': (coin_id, symbol),
                     'weeks': self.weeks,
                     'session_guid': session_guid
+                    # Pas de 'quote_currencies_override' ici, on utilise la config par défaut
                 })
         else:
+            # C'est un altcoin, on le compare à la référence BTC/USDC déjà stockée
             self._analyze_correlation(coin_id_symbol, rsi_series, session_guid)
 
     def _analyze_correlation(self, coin_id_symbol: Tuple[str, str], coin_rsi: pd.Series, session_guid: str):
@@ -214,7 +236,7 @@ class CryptoAnalyzer:
         self._decrement_processing_counter()
 
     def _decrement_processing_counter(self):
-        """Décrémente le compteur de coins à traiter et publie les résultats finaux si terminé."""
+        """Décrémente le compteur de coins à traiter et publie les résultats finaux si le traitement est terminé."""
         with self._counter_lock:
             self._processing_counter -= 1
             logger.debug(f"Compteur de traitement : {self._processing_counter}")
