@@ -48,8 +48,8 @@ class DatabaseManager(threading.Thread):
 
     def _handle_rsi_calculated(self, event: RSICalculated):
         """Met en file d'attente la tâche d'enregistrement du RSI."""
-        if event.rsi is not None and event.quote_currency is not None:
-            self.work_queue.put(('_db_save_rsi', (event.coin_id_symbol, event.rsi, event.session_guid, event.quote_currency), {}, None))
+        if event.rsi is not None:
+            self.work_queue.put(('_db_save_rsi', (event.coin_id_symbol, event.rsi, event.session_guid), {}, None))
 
     def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):
         """Met en file d'attente la tâche d'enregistrement d'une corrélation."""
@@ -61,8 +61,7 @@ class DatabaseManager(threading.Thread):
                 result['correlation'],
                 result['market_cap'],
                 result['low_cap_quartile'],
-                event.session_guid,
-                result['quote_currency']
+                event.session_guid
             )
             self.work_queue.put(('_db_save_correlation', task_args, {}, None))
 
@@ -124,22 +123,21 @@ class DatabaseManager(threading.Thread):
                 CREATE TABLE IF NOT EXISTS prices (
                     coin_id TEXT, coin_symbol TEXT, timestamp TIMESTAMP, session_guid TEXT,
                     quote_currency TEXT,
-                    open REAL, high REAL, low REAL, close REAL, volume REAL,
+                    open REAL, high REAL, low REAL, close REAL,
                     PRIMARY KEY (coin_id, timestamp, session_guid, quote_currency)
                 )
             ''')
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS rsi (
-                    coin_id TEXT, coin_symbol TEXT, timestamp TIMESTAMP, session_guid TEXT, 
-                    quote_currency TEXT, rsi REAL,
-                    PRIMARY KEY (coin_id, timestamp, session_guid, quote_currency)
+                    coin_id TEXT, coin_symbol TEXT, timestamp TIMESTAMP, session_guid TEXT, rsi REAL,
+                    PRIMARY KEY (coin_id, timestamp, session_guid)
                 )
             ''')
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS correlations (
                     coin_id TEXT, coin_symbol TEXT, run_timestamp TIMESTAMP, session_guid TEXT,
-                    quote_currency TEXT, correlation REAL, market_cap REAL, low_cap_quartile BOOLEAN,
-                    PRIMARY KEY (coin_id, run_timestamp, session_guid, quote_currency)
+                    correlation REAL, market_cap REAL, low_cap_quartile BOOLEAN,
+                    PRIMARY KEY (coin_id, run_timestamp, session_guid)
                 )
             ''')
             self.cursor.execute('''
@@ -156,30 +154,16 @@ class DatabaseManager(threading.Thread):
             logger.error(f"Erreur lors de l'initialisation des tables: {e}")
             raise
 
-    def get_prices(self, coin_id_symbol: Tuple[str, str], start_date: datetime, session_guid: Optional[str] = None, quote_currency: Optional[str] = None) -> \
+    # --- Méthodes publiques pour la récupération de données ---
+    def get_prices(self, coin_id_symbol: Tuple[str, str], start_date: datetime, session_guid: Optional[str] = None) -> \
             Optional[pd.DataFrame]:
-        """Récupère les prix OHLC et volume depuis la base de manière threadsafe."""
-        coin_id, _ = coin_id_symbol
-        try:
-            query = '''
-                SELECT timestamp, open, high, low, close, volume FROM prices
-                WHERE coin_id = ? AND timestamp >= ? AND session_guid = ?
-            '''
-            params = [coin_id, start_date.isoformat(), session_guid]
-            if quote_currency:
-                query += ' AND quote_currency = ?'
-                params.append(quote_currency)
-            query += ' ORDER BY timestamp'
-            self.cursor.execute(query, params)
-            rows = self.cursor.fetchall()
-            if not rows:
-                return None
-            df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
-                              index=[datetime.fromisoformat(row[0]).astimezone(timezone.utc) for row in rows])
-            return df
-        except Exception as e:
-            logger.error(f"Erreur lors de la récupération des prix pour {coin_id}: {e}")
-            return None
+        """Récupère les prix OHLC depuis la base de manière threadsafe."""
+        result_queue = queue.Queue()
+        self.work_queue.put(('_db_get_prices', (coin_id_symbol, start_date, session_guid), {}, result_queue))
+        result = result_queue.get()
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     def get_correlations(self, session_guid: Optional[str]) -> List[Tuple]:
         """Récupère les dernières corrélations de manière threadsafe."""
@@ -190,6 +174,7 @@ class DatabaseManager(threading.Thread):
             raise result
         return result
 
+    # --- Tâches de base de données exécutées par le thread ---
     def _db_save_token(self, coin: Dict, session_guid: Optional[str]) -> None:
         """Tâche interne pour enregistrer les informations d'un token."""
         coin_id = coin.get('id')
@@ -249,11 +234,11 @@ class DatabaseManager(threading.Thread):
 
     def _db_save_prices(self, coin_id_symbol: Tuple[str, str], prices_df: pd.DataFrame,
                         session_guid: Optional[str], quote_currency: str) -> None:
-        """Tâche interne pour enregistrer les prix OHLC et volume."""
+        """Tâche interne pour enregistrer les prix OHLC."""
         coin_id, coin_symbol = coin_id_symbol
         try:
             if prices_df.empty:
-                logger.warning(f"DataFrame vide pour {coin_id}/{quote_currency}, aucune donnée enregistrée.")
+                logger.warning(f"DataFrame vide pour {coin_id}, aucune donnée enregistrée.")
                 return
             for _, row in prices_df.iterrows():
                 timestamp = row['timestamp']
@@ -261,47 +246,48 @@ class DatabaseManager(threading.Thread):
                 iso_string = dt.isoformat()
 
                 self.cursor.execute('''
-                    INSERT INTO prices (coin_id, coin_symbol, timestamp, session_guid, quote_currency, open, high, low, close, volume)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO prices (coin_id, coin_symbol, timestamp, session_guid, quote_currency, open, high, low, close)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (coin_id, coin_symbol, iso_string, session_guid, quote_currency, row['open'], row['high'],
-                      row['low'], row['close'], row['volume']))
+                      row['low'],
+                      row['close']))
             self.conn.commit()
 
-            logger.info(f"Prix et volume pour {coin_id}/{quote_currency} enregistrés avec session_guid={session_guid}.")
+            logger.info(f"Prix pour {coin_id}/{quote_currency} enregistrés avec session_guid={session_guid}.")
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement des prix pour {coin_id}: {e}")
 
-    def _db_save_rsi(self, coin_id_symbol: Tuple[str, str], rsi_series: pd.Series, session_guid: Optional[str], quote_currency: str) -> None:
+    def _db_save_rsi(self, coin_id_symbol: Tuple[str, str], rsi_series: pd.Series, session_guid: Optional[str]) -> None:
         """Tâche interne pour enregistrer les valeurs RSI."""
         coin_id, coin_symbol = coin_id_symbol
         try:
             if rsi_series.empty:
-                logger.warning(f"Série RSI vide pour {coin_id}/{quote_currency}, aucune donnée enregistrée.")
+                logger.warning(f"Série RSI vide pour {coin_id}, aucune donnée enregistrée.")
                 return
             for timestamp, rsi_value in rsi_series.items():
                 if not pd.isna(rsi_value):
                     # noinspection PyUnresolvedReferences
                     dt = timestamp.to_pydatetime().isoformat()
                     self.cursor.execute('''
-                        INSERT INTO rsi (coin_id, coin_symbol, timestamp, session_guid, quote_currency, rsi)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (coin_id, coin_symbol, dt, session_guid, quote_currency, rsi_value))
+                        INSERT INTO rsi (coin_id, coin_symbol, timestamp, session_guid, rsi)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (coin_id, coin_symbol, dt, session_guid, rsi_value))
             self.conn.commit()
-            logger.info(f"RSI pour {coin_id}/{quote_currency} enregistré avec session_guid={session_guid}.")
+            logger.info(f"RSI pour {coin_id} enregistré avec session_guid={session_guid}.")
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement du RSI pour {coin_id}: {e}")
 
     def _db_save_correlation(self, coin_id_symbol: Tuple[str, str], run_timestamp: str, correlation: float,
-                             market_cap: float, low_cap_quartile: bool, session_guid: Optional[str], quote_currency: str) -> None:
+                             market_cap: float, low_cap_quartile: bool, session_guid: Optional[str]) -> None:
         """Tâche interne pour enregistrer une corrélation."""
         coin_id, coin_symbol = coin_id_symbol
         try:
             self.cursor.execute('''
-                INSERT INTO correlations (coin_id, coin_symbol, run_timestamp, session_guid, quote_currency, correlation, market_cap, low_cap_quartile)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (coin_id, coin_symbol, run_timestamp, session_guid, quote_currency, correlation, market_cap, low_cap_quartile))
+                INSERT INTO correlations (coin_id, coin_symbol, run_timestamp, session_guid, correlation, market_cap, low_cap_quartile)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (coin_id, coin_symbol, run_timestamp, session_guid, correlation, market_cap, low_cap_quartile))
             self.conn.commit()
-            logger.info(f"Corrélation pour {coin_id}/{quote_currency} enregistrée avec session_guid={session_guid}.")
+            logger.info(f"Corrélation pour {coin_id} enregistrée avec session_guid={session_guid}.")
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement de la corrélation pour {coin_id}: {e}")
 
@@ -327,11 +313,30 @@ class DatabaseManager(threading.Thread):
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement des données de précision: {e}")
 
+    def _db_get_prices(self, coin_id_symbol: Tuple[str, str], start_date: datetime, session_guid: Optional[str]) -> \
+            Optional[pd.DataFrame]:
+        """Tâche interne pour récupérer les prix OHLC."""
+        coin_id, _ = coin_id_symbol
+        try:
+            self.cursor.execute('''
+                SELECT timestamp, open, high, low, close FROM prices
+                WHERE coin_id = ? AND timestamp >= ? AND session_guid = ? ORDER BY timestamp
+            ''', (coin_id, start_date.isoformat(), session_guid,))
+            rows = self.cursor.fetchall()
+            if not rows:
+                return None
+            df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close'],
+                              index=[datetime.fromisoformat(row[0]).astimezone(timezone.utc) for row in rows])
+            return df
+        except Exception as e:
+            logger.error(f"Erreur lors de la récupération des prix pour {coin_id}: {e}")
+            return None
+
     def _db_get_correlations(self, session_guid: Optional[str]) -> List[Tuple]:
         """Tâche interne pour récupérer les dernières corrélations."""
         try:
             self.cursor.execute('''
-                SELECT coin_id, coin_symbol, run_timestamp, correlation, market_cap, low_cap_quartile, quote_currency
+                SELECT coin_id, coin_symbol, run_timestamp, correlation, market_cap, low_cap_quartile
                 FROM correlations WHERE session_guid = ? ORDER BY run_timestamp DESC
             ''', (session_guid,))
             return self.cursor.fetchall()

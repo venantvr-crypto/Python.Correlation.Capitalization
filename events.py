@@ -70,7 +70,6 @@ class CalculateRSIRequested:
     coin_id_symbol: Tuple[str, str]
     prices_series: Optional[pd.Series]
     session_guid: str
-    quote_currency: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -79,7 +78,6 @@ class RSICalculated:
     coin_id_symbol: Tuple[str, str]
     rsi: Optional[pd.Series]
     session_guid: str
-    quote_currency: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -93,7 +91,6 @@ class CorrelationAnalyzed:
 class CoinProcessingFailed:
     """Événement signalant l'échec du traitement d'une pièce."""
     coin_id_symbol: Tuple[str, str]
-    quote_currency: Optional[str]
 
 
 @dataclass(frozen=True)
