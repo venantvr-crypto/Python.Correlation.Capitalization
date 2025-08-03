@@ -18,12 +18,11 @@ class CryptoAnalyzer:
     """Orchestre l'analyse des corrélations RSI pour le scalping, piloté par les événements."""
 
     def __init__(self, weeks: int = 50, top_n_coins: int = 200, correlation_threshold: float = 0.7,
-                 rsi_period: int = 14, session_guid: Optional[str] = None, min_correlation_samples: int = 30):
+                 rsi_period: int = 14, session_guid: Optional[str] = None):
         self.weeks = weeks
         self.top_n_coins = top_n_coins
         self.correlation_threshold = correlation_threshold
         self.rsi_period = rsi_period
-        self.min_correlation_samples = min_correlation_samples
         self.session_guid = session_guid
         self.market_caps: Dict[str, float] = {}
         self.low_cap_threshold: float = float('inf')
@@ -175,8 +174,7 @@ class CryptoAnalyzer:
             return
 
         common_index_rsi = self.btc_rsi.index.intersection(coin_rsi.index)
-        # if len(common_index_rsi) < self.rsi_period:
-        if len(common_index_rsi) < self.min_correlation_samples:
+        if len(common_index_rsi) < self.rsi_period:
             logger.warning(f"Index commun RSI insuffisant pour {coin_id_symbol[1]}.")
             self.service_bus.publish("CoinProcessingFailed", {'coin_id_symbol': coin_id_symbol})
             return
