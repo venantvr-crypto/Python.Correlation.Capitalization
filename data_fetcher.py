@@ -63,7 +63,7 @@ class DataFetcher(threading.Thread):
         self.join()
 
     @retry(
-        stop=stop_after_attempt(10),
+        stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
         retry=retry_if_exception_type((ccxt.NetworkError, ccxt.ExchangeError)),
         before_sleep=lambda retry_state: logger.warning(
@@ -83,7 +83,7 @@ class DataFetcher(threading.Thread):
             self.service_bus.publish("TopCoinsFetched", {'coins': coins[:n], 'session_guid': session_guid})
 
     @retry(
-        stop=stop_after_attempt(10),
+        stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
         retry=retry_if_exception_type((ccxt.NetworkError, ccxt.ExchangeError)),
         before_sleep=lambda retry_state: logger.warning(
@@ -116,7 +116,7 @@ class DataFetcher(threading.Thread):
                                       'session_guid': session_guid})
 
     @retry(
-        stop=stop_after_attempt(10),
+        stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
         retry=retry_if_exception_type((ccxt.NetworkError, ccxt.ExchangeError)),
         before_sleep=lambda retry_state: logger.warning(
