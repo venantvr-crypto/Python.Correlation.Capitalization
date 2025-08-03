@@ -1,7 +1,7 @@
 import queue
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple
 
 import ccxt
 import pandas as pd
@@ -16,15 +16,12 @@ from service_bus import ServiceBus
 class DataFetcher(threading.Thread):
     """Récupère les données de marché dans son propre thread."""
 
-    def __init__(self, session_guid: Optional[str] = None,
-                 service_bus: Optional[ServiceBus] = None,
-                 quote_currencies: List[str] = None):
+    def __init__(self, session_guid: Optional[str] = None, service_bus: Optional[ServiceBus] = None):
         super().__init__()
         self.cg = CoinGeckoAPI()
         self.binance = ccxt.binance()
         self.session_guid = session_guid
         self.service_bus = service_bus
-        self.quote_currencies = quote_currencies if quote_currencies is not None else ['USDC']
         self.work_queue = queue.Queue()
         self._running = True
 
@@ -37,8 +34,7 @@ class DataFetcher(threading.Thread):
         self.work_queue.put(('_fetch_top_coins_task', (event.n, event.session_guid)))
 
     def _handle_fetch_historical_prices_requested(self, event: FetchHistoricalPricesRequested):
-        self.work_queue.put(('_fetch_historical_prices_task',
-                             (event.coin_id_symbol, event.weeks, event.session_guid, event.quote_currencies_override)))
+        self.work_queue.put(('_fetch_historical_prices_task', (event.coin_id_symbol, event.weeks, event.session_guid)))
 
     def _handle_fetch_precision_data_requested(self, event: FetchPrecisionDataRequested):
         self.work_queue.put(('_fetch_precision_data_task', (event.session_guid,)))
@@ -93,32 +89,16 @@ class DataFetcher(threading.Thread):
         before_sleep=lambda retry_state: logger.warning(
             f"Réessai pour {retry_state.fn.__name__}: tentative {retry_state.attempt_number}")
     )
-    def _fetch_historical_prices_task(self, coin_id_symbol: Tuple[str, str], weeks: int, session_guid: str,
-                                      quote_currencies_override: Optional[List[str]]) -> None:
+    def _fetch_historical_prices_task(self, coin_id_symbol: Tuple[str, str], weeks: int, session_guid: str) -> None:
         coin_id, coin_symbol = coin_id_symbol
-
-        quotes_to_try = quote_currencies_override if quote_currencies_override is not None else self.quote_currencies
-
-        found_symbol = None
-        quote_for_symbol = None
-        for quote in quotes_to_try:
-            potential_symbol = f"{coin_symbol.upper()}/{quote.upper()}"
-            if potential_symbol in self.binance.symbols:
-                found_symbol = potential_symbol
-                quote_for_symbol = quote
-                # On garde en mémoire la devise qui a fonctionné
-                break
-
-        if not found_symbol:
-            logger.warning(f"Aucun symbole trouvé pour {coin_symbol} avec les devises {quotes_to_try} sur Binance.")
+        symbol = f"{coin_symbol.upper()}/USDC"
+        if symbol not in self.binance.symbols:
+            logger.warning(f"Symbole {symbol} introuvable sur Binance.")
             if self.service_bus:
                 self.service_bus.publish("HistoricalPricesFetched",
                                          {'coin_id_symbol': coin_id_symbol, 'prices_df': None,
-                                          'session_guid': session_guid, 'quote_currency': None})
+                                          'session_guid': session_guid})
             return
-
-        symbol = found_symbol
-
         days = weeks * 7
         end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
@@ -133,8 +113,7 @@ class DataFetcher(threading.Thread):
         if self.service_bus:
             self.service_bus.publish("HistoricalPricesFetched",
                                      {'coin_id_symbol': coin_id_symbol, 'prices_df': prices_df,
-                                      'session_guid': session_guid,
-                                      'quote_currency': quote_for_symbol})
+                                      'session_guid': session_guid})
 
     @retry(
         stop=stop_after_attempt(10),
@@ -149,7 +128,7 @@ class DataFetcher(threading.Thread):
             markets = self.binance.load_markets()
             precision_data = []
             for symbol, market_info in markets.items():
-
+                # MODIFICATION : On ne filtre plus sur 'USDC', on prend tous les marchés actifs.
                 if market_info.get('active'):
                     # Chercher les filtres PRICE_FILTER et LOT_SIZE
                     lot_size_filter = next((f for f in market_info['info']['filters']

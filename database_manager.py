@@ -41,10 +41,9 @@ class DatabaseManager(threading.Thread):
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
         """Met en file d'attente la tâche d'enregistrement des prix."""
-        if event.prices_df is not None and event.quote_currency is not None:
+        if event.prices_df is not None:
             self.work_queue.put(
-                ('_db_save_prices', (event.coin_id_symbol, event.prices_df, event.session_guid, event.quote_currency),
-                 {}, None))
+                ('_db_save_prices', (event.coin_id_symbol, event.prices_df, event.session_guid), {}, None))
 
     def _handle_rsi_calculated(self, event: RSICalculated):
         """Met en file d'attente la tâche d'enregistrement du RSI."""
@@ -122,9 +121,8 @@ class DatabaseManager(threading.Thread):
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS prices (
                     coin_id TEXT, coin_symbol TEXT, timestamp TIMESTAMP, session_guid TEXT,
-                    quote_currency TEXT,
                     open REAL, high REAL, low REAL, close REAL,
-                    PRIMARY KEY (coin_id, timestamp, session_guid, quote_currency)
+                    PRIMARY KEY (coin_id, timestamp, session_guid)
                 )
             ''')
             self.cursor.execute('''
@@ -184,16 +182,14 @@ class DatabaseManager(threading.Thread):
                 return
 
             def safe_int(value):
-                if value is None:
-                    return None
+                if value is None: return None
                 try:
                     return int(float(value)) if isinstance(value, (float, str)) else value
                 except (ValueError, TypeError):
                     return None
 
             def safe_float(value):
-                if value is None:
-                    return None
+                if value is None: return None
                 try:
                     return float(value) if isinstance(value, (int, str)) else value
                 except (ValueError, TypeError):
@@ -233,7 +229,7 @@ class DatabaseManager(threading.Thread):
             logger.error(f"Erreur lors de l'enregistrement du token {coin_id}: {e}")
 
     def _db_save_prices(self, coin_id_symbol: Tuple[str, str], prices_df: pd.DataFrame,
-                        session_guid: Optional[str], quote_currency: str) -> None:
+                        session_guid: Optional[str]) -> None:
         """Tâche interne pour enregistrer les prix OHLC."""
         coin_id, coin_symbol = coin_id_symbol
         try:
@@ -244,16 +240,13 @@ class DatabaseManager(threading.Thread):
                 timestamp = row['timestamp']
                 dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
                 iso_string = dt.isoformat()
-
                 self.cursor.execute('''
-                    INSERT INTO prices (coin_id, coin_symbol, timestamp, session_guid, quote_currency, open, high, low, close)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (coin_id, coin_symbol, iso_string, session_guid, quote_currency, row['open'], row['high'],
-                      row['low'],
+                    INSERT INTO prices (coin_id, coin_symbol, timestamp, session_guid, open, high, low, close)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (coin_id, coin_symbol, iso_string, session_guid, row['open'], row['high'], row['low'],
                       row['close']))
             self.conn.commit()
-
-            logger.info(f"Prix pour {coin_id}/{quote_currency} enregistrés avec session_guid={session_guid}.")
+            logger.info(f"Prix pour {coin_id} enregistrés avec session_guid={session_guid}.")
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement des prix pour {coin_id}: {e}")
 

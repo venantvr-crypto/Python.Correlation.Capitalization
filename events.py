@@ -52,7 +52,6 @@ class FetchHistoricalPricesRequested:
     coin_id_symbol: Tuple[str, str]
     weeks: int
     session_guid: str
-    quote_currencies_override: Optional[List[str]] = None
 
 
 @dataclass(frozen=True)
@@ -61,7 +60,6 @@ class HistoricalPricesFetched:
     coin_id_symbol: Tuple[str, str]
     prices_df: Optional[pd.DataFrame]
     session_guid: str
-    quote_currency: Optional[str]
 
 
 @dataclass(frozen=True)
