@@ -24,7 +24,7 @@ class DataFetcher(threading.Thread):
         self.binance = ccxt.binance()
         self.session_guid = session_guid
         self.service_bus = service_bus
-        self.quote_currencies = quote_currencies if quote_currencies is not None else ['USDC']
+        self.quote_currencies = quote_currencies if quote_currencies is not None else ['USDT', 'USDC', 'BNB']
         self.work_queue = queue.Queue()
         self._running = True
 
@@ -96,7 +96,6 @@ class DataFetcher(threading.Thread):
     def _fetch_historical_prices_task(self, coin_id_symbol: Tuple[str, str], weeks: int, session_guid: str,
                                       quote_currencies_override: Optional[List[str]]) -> None:
         coin_id, coin_symbol = coin_id_symbol
-
         quotes_to_try = quote_currencies_override if quote_currencies_override is not None else self.quote_currencies
 
         found_symbol = None
@@ -106,7 +105,6 @@ class DataFetcher(threading.Thread):
             if potential_symbol in self.binance.symbols:
                 found_symbol = potential_symbol
                 quote_for_symbol = quote
-                # On garde en mémoire la devise qui a fonctionné
                 break
 
         if not found_symbol:
@@ -118,7 +116,6 @@ class DataFetcher(threading.Thread):
             return
 
         symbol = found_symbol
-
         days = weeks * 7
         end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
@@ -149,9 +146,7 @@ class DataFetcher(threading.Thread):
             markets = self.binance.load_markets()
             precision_data = []
             for symbol, market_info in markets.items():
-
                 if market_info.get('active'):
-                    # Chercher les filtres PRICE_FILTER et LOT_SIZE
                     lot_size_filter = next((f for f in market_info['info']['filters']
                                             if f['filterType'] == 'LOT_SIZE'), None)
                     price_filter = next(
