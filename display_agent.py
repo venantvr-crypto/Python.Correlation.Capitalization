@@ -31,12 +31,9 @@ class DisplayAgent(threading.Thread):
                 event = self.work_queue.get(timeout=1)
                 if event is None:
                     continue
-
                 self._display_results(event)
                 self.work_queue.task_done()
-
                 self.service_bus.publish("DisplayCompleted", {})
-
             except queue.Empty:
                 continue
             except Exception as e:
@@ -52,27 +49,22 @@ class DisplayAgent(threading.Thread):
     # noinspection PyMethodMayBeStatic
     def _display_results(self, event: FinalResultsReady):
         """Affiche les résultats finaux."""
-        # Accès direct aux attributs de l'objet dataclass
+        # CORRECTION : Utiliser les résultats et timeframes directement depuis l'événement
         results = event.results
         weeks = event.weeks
-        session_guid = event.session_guid
-        timeframe = event.timeframe
-        db_manager = event.db_manager
+        timeframes_str = ", ".join(event.timeframes)
 
-        results = sorted(results, key=lambda x: (-abs(x['correlation']), x['market_cap']))
-        logger.info(f"Tokens à faible capitalisation avec forte corrélation RSI avec BTC ({weeks} semaines) :")
-        for result in results:
+        sorted_results = sorted(results, key=lambda x: (-abs(x.get('correlation', 0)), x.get('market_cap', 0)))
+
+        logger.info(f"Tokens à faible capitalisation avec forte corrélation RSI avec BTC ({weeks} semaines, timeframes: {timeframes_str}) :")
+
+        if not sorted_results:
+            logger.info("Aucun résultat à afficher.")
+            return
+
+        for result in sorted_results:
             logger.info(
-                f"Coin: {result['coin_id']}/{result['coin_symbol']}, Correlation RSI: {result['correlation']:.3f}, "
-                f"Market Cap: ${result['market_cap']:,.2f}")
-
-        logger.info("Résumé de l'historique des corrélations :")
-        try:
-            if db_manager and session_guid:
-                correlations = db_manager.get_correlations(session_guid=session_guid, timeframe=timeframe)
-                for row in correlations:
-                    logger.info(
-                        f"Run: {row[2]}, Coin: {row[0]}/{row[1]}, Correlation: {row[3]:.3f}, Market Cap: ${row[4]:,.2f}, "
-                        f"Low Cap Quartile: {row[5]}")
-        except Exception as e:
-            logger.error(f"Erreur lors de l'affichage de l'historique des corrélations : {e}")
+                f"Coin: {result['coin_id']}/{result['coin_symbol']}, "
+                f"Correlation RSI: {result['correlation']:.3f}, "
+                f"Market Cap: ${result['market_cap']:,.2f}"
+            )

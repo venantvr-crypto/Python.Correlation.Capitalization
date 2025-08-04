@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Dict, Tuple, Optional, Any
+from typing import List, Dict, Tuple, Optional
 
 import pandas as pd
 
@@ -97,6 +97,7 @@ class CorrelationAnalyzed:
 class CoinProcessingFailed:
     """Événement signalant l'échec du traitement d'une pièce."""
     coin_id_symbol: Tuple[str, str]
+    timeframe: str
 
 
 @dataclass(frozen=True)
@@ -105,14 +106,19 @@ class FinalResultsReady:
     results: List[Dict]
     weeks: int
     session_guid: str
-    timeframe: str
-    db_manager: Any
+    timeframes: List[str]
 
 
 @dataclass(frozen=True)
 class DisplayCompleted:
     """Événement de fin signalant que l'affichage est terminé."""
     pass
+
+
+@dataclass(frozen=True)
+class AnalysisJobCompleted:
+    """Signale que l'analyse pour un timeframe est terminée."""
+    timeframe: str
 
 
 @dataclass(frozen=True)
