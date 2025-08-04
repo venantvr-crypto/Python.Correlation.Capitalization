@@ -43,7 +43,7 @@ class DatabaseManager(threading.Thread):
         """Met en file d'attente la tâche d'enregistrement des prix."""
         if event.prices_df is not None:
             self.work_queue.put(
-                ('_db_save_prices', (event.coin_id_symbol, event.prices_df, event.session_guid), {}, None))
+                ('_db_save_prices', (event.coin_id_symbol, event.prices_df, event.session_guid, event.timeframe), {}, None))
 
     def _handle_rsi_calculated(self, event: RSICalculated):
         """Met en file d'attente la tâche d'enregistrement du RSI."""
@@ -121,7 +121,7 @@ class DatabaseManager(threading.Thread):
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS prices (
                     coin_id TEXT, coin_symbol TEXT, timestamp TIMESTAMP, session_guid TEXT,
-                    open REAL, high REAL, low REAL, close REAL,
+                    open REAL, high REAL, low REAL, close REAL, volume REAL, timeframe TEXT,
                     PRIMARY KEY (coin_id, timestamp, session_guid)
                 )
             ''')
@@ -153,11 +153,10 @@ class DatabaseManager(threading.Thread):
             raise
 
     # --- Méthodes publiques pour la récupération de données ---
-    def get_prices(self, coin_id_symbol: Tuple[str, str], start_date: datetime, session_guid: Optional[str] = None) -> \
-            Optional[pd.DataFrame]:
+    def get_prices(self, coin_id_symbol: Tuple[str, str], start_date: datetime, session_guid: Optional[str], timeframe: str) -> Optional[pd.DataFrame]:
         """Récupère les prix OHLC depuis la base de manière threadsafe."""
         result_queue = queue.Queue()
-        self.work_queue.put(('_db_get_prices', (coin_id_symbol, start_date, session_guid), {}, result_queue))
+        self.work_queue.put(('_db_get_prices', (coin_id_symbol, start_date, session_guid, timeframe), {}, result_queue))
         result = result_queue.get()
         if isinstance(result, Exception):
             raise result
@@ -182,14 +181,16 @@ class DatabaseManager(threading.Thread):
                 return
 
             def safe_int(value):
-                if value is None: return None
+                if value is None:
+                    return None
                 try:
                     return int(float(value)) if isinstance(value, (float, str)) else value
                 except (ValueError, TypeError):
                     return None
 
             def safe_float(value):
-                if value is None: return None
+                if value is None:
+                    return None
                 try:
                     return float(value) if isinstance(value, (int, str)) else value
                 except (ValueError, TypeError):
@@ -227,8 +228,7 @@ class DatabaseManager(threading.Thread):
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement du token {coin_id}: {e}")
 
-    def _db_save_prices(self, coin_id_symbol: Tuple[str, str], prices_df: pd.DataFrame,
-                        session_guid: Optional[str]) -> None:
+    def _db_save_prices(self, coin_id_symbol: Tuple[str, str], prices_df: pd.DataFrame, session_guid: Optional[str], timeframe: str) -> None:
         """Tâche interne pour enregistrer les prix OHLC."""
         coin_id, coin_symbol = coin_id_symbol
         try:
@@ -240,10 +240,9 @@ class DatabaseManager(threading.Thread):
                 dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
                 iso_string = dt.isoformat()
                 self.cursor.execute('''
-                    INSERT INTO prices (coin_id, coin_symbol, timestamp, session_guid, open, high, low, close)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (coin_id, coin_symbol, iso_string, session_guid, row['open'], row['high'], row['low'],
-                      row['close']))
+                    INSERT INTO prices (coin_id, coin_symbol, timestamp, session_guid, open, high, low, close, volume, timeframe)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (coin_id, coin_symbol, iso_string, session_guid, row['open'], row['high'], row['low'], row['close'], row['volume'], timeframe))
             self.conn.commit()
             logger.info(f"Prix pour {coin_id} enregistrés avec session_guid={session_guid}.")
         except Exception as e:
@@ -305,19 +304,18 @@ class DatabaseManager(threading.Thread):
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement des données de précision: {e}")
 
-    def _db_get_prices(self, coin_id_symbol: Tuple[str, str], start_date: datetime, session_guid: Optional[str]) -> \
-            Optional[pd.DataFrame]:
+    def _db_get_prices(self, coin_id_symbol: Tuple[str, str], start_date: datetime, session_guid: Optional[str], timeframe: str) -> Optional[pd.DataFrame]:
         """Tâche interne pour récupérer les prix OHLC."""
         coin_id, _ = coin_id_symbol
         try:
             self.cursor.execute('''
-                SELECT timestamp, open, high, low, close FROM prices
-                WHERE coin_id = ? AND timestamp >= ? AND session_guid = ? ORDER BY timestamp
-            ''', (coin_id, start_date.isoformat(), session_guid,))
+                SELECT timestamp, open, high, low, close, volume FROM prices
+                WHERE coin_id = ? AND timestamp >= ? AND session_guid = ? AND timeframe = ? ORDER BY timestamp
+            ''', (coin_id, start_date.isoformat(), session_guid, timeframe,))
             rows = self.cursor.fetchall()
             if not rows:
                 return None
-            df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close'],
+            df = pd.DataFrame(rows, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
                               index=[datetime.fromisoformat(row[0]).astimezone(timezone.utc) for row in rows])
             return df
         except Exception as e:

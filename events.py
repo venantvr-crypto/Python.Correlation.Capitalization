@@ -36,6 +36,8 @@ class CalculateMarketCapThresholdRequested:
     """Événement de requête pour calculer le seuil de capitalisation."""
     coins: List[Dict]
     session_guid: str
+    q_percentile: float
+    timeframe: str
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,7 @@ class MarketCapThresholdCalculated:
     market_caps: Dict[str, float]
     low_cap_threshold: float
     session_guid: str
+    timeframe: str
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,7 @@ class FetchHistoricalPricesRequested:
     coin_id_symbol: Tuple[str, str]
     weeks: int
     session_guid: str
+    timeframe: str
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,7 @@ class HistoricalPricesFetched:
     coin_id_symbol: Tuple[str, str]
     prices_df: Optional[pd.DataFrame]
     session_guid: str
+    timeframe: str
 
 
 @dataclass(frozen=True)
@@ -68,6 +73,7 @@ class CalculateRSIRequested:
     coin_id_symbol: Tuple[str, str]
     prices_series: Optional[pd.Series]
     session_guid: str
+    timeframe: str
 
 
 @dataclass(frozen=True)
@@ -76,6 +82,7 @@ class RSICalculated:
     coin_id_symbol: Tuple[str, str]
     rsi: Optional[pd.Series]
     session_guid: str
+    timeframe: str
 
 
 @dataclass(frozen=True)

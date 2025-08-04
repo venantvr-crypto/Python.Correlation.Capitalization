@@ -55,11 +55,14 @@ class MarketCapAgent(threading.Thread):
         market_caps: Dict[str, float] = {coin['symbol']: coin['market_cap'] for coin in coins if 'market_cap' in coin}
         market_caps_values = list(market_caps.values())
 
-        low_cap_threshold = np.percentile(market_caps_values, 25) if market_caps_values else float('inf')
+        timeframe = event.timeframe
+
+        low_cap_threshold = np.percentile(market_caps_values, event.q_percentile) if market_caps_values else float('inf')
         logger.info(f"Seuil de faible capitalisation (25e percentile): ${low_cap_threshold:,.2f}")
 
         self.service_bus.publish("MarketCapThresholdCalculated", {
             'market_caps': market_caps,
             'low_cap_threshold': low_cap_threshold,
-            'session_guid': session_guid
+            'session_guid': session_guid,
+            'timeframe': timeframe
         })

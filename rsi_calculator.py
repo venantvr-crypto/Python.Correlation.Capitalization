@@ -24,7 +24,7 @@ class RSICalculator(threading.Thread):
             self.service_bus.subscribe("CalculateRSIRequested", self._handle_calculate_rsi_requested)
 
     def _handle_calculate_rsi_requested(self, event: CalculateRSIRequested):
-        self.work_queue.put(('_calculate_rsi_task', (event.coin_id_symbol, event.prices_series, event.session_guid)))
+        self.work_queue.put(('_calculate_rsi_task', (event.coin_id_symbol, event.prices_series, event.session_guid, event.timeframe)))
 
     def run(self):
         logger.info("Thread RSICalculator démarré.")
@@ -49,8 +49,7 @@ class RSICalculator(threading.Thread):
         self.work_queue.put(None)
         self.join()
 
-    def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: pd.Series,
-                            session_guid: Optional[str]) -> None:
+    def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: pd.Series, session_guid: Optional[str], timeframe: str) -> None:
         try:
             if data is None or data.empty or len(data) < self.periods + 1:
                 raise ValueError("Données insuffisantes pour calculer le RSI")
@@ -64,9 +63,9 @@ class RSICalculator(threading.Thread):
             rsi = 100 - (100 / (1 + rs))
             if self.service_bus:
                 self.service_bus.publish("RSICalculated",
-                                         {'coin_id_symbol': coin_id_symbol, 'rsi': rsi, 'session_guid': session_guid})
+                                         {'coin_id_symbol': coin_id_symbol, 'rsi': rsi, 'session_guid': session_guid, 'timeframe': timeframe})
         except Exception as e:
             logger.error(f"Erreur lors du calcul du RSI pour {coin_id_symbol}: {e}")
             if self.service_bus:
                 self.service_bus.publish("RSICalculated",
-                                         {'coin_id_symbol': coin_id_symbol, 'rsi': None, 'session_guid': session_guid})
+                                         {'coin_id_symbol': coin_id_symbol, 'rsi': None, 'session_guid': session_guid, 'timeframe': timeframe})

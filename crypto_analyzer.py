@@ -106,7 +106,9 @@ class CryptoAnalyzer:
 
         self.service_bus.publish("CalculateMarketCapThresholdRequested", {
             'coins': self.coins,
-            'session_guid': self.session_guid
+            'session_guid': self.session_guid,
+            'q_percentile': 100.0,
+            'timeframe': '1d'
         })
 
     def _handle_market_cap_threshold_calculated(self, event: MarketCapThresholdCalculated):
@@ -120,13 +122,15 @@ class CryptoAnalyzer:
         self.service_bus.publish("FetchHistoricalPricesRequested", {
             'coin_id_symbol': ('bitcoin', 'btc'),
             'weeks': self.weeks,
-            'session_guid': event.session_guid
+            'session_guid': event.session_guid,
+            'timeframe': event.timeframe
         })
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
         """Lance le calcul du RSI pour les prix reçus."""
         coin_id_symbol = event.coin_id_symbol
         prices_df = event.prices_df
+        timeframe = event.timeframe
         session_guid = event.session_guid
         coin_symbol = coin_id_symbol[1]
 
@@ -138,13 +142,15 @@ class CryptoAnalyzer:
         self.service_bus.publish("CalculateRSIRequested", {
             'coin_id_symbol': coin_id_symbol,
             'prices_series': prices_df['close'],
-            'session_guid': session_guid
+            'session_guid': session_guid,
+            'timeframe': timeframe
         })
 
     def _handle_rsi_calculated(self, event: RSICalculated):
         """Traite le RSI calculé : stocke celui de BTC ou lance l'analyse de corrélation."""
         coin_id_symbol = event.coin_id_symbol
         rsi_series = event.rsi
+        timeframe = event.timeframe
         session_guid = event.session_guid
         coin_symbol = coin_id_symbol[1]
 
@@ -161,7 +167,8 @@ class CryptoAnalyzer:
                 self.service_bus.publish("FetchHistoricalPricesRequested", {
                     'coin_id_symbol': (coin_id, symbol),
                     'weeks': self.weeks,
-                    'session_guid': session_guid
+                    'session_guid': session_guid,
+                    'timeframe': timeframe
                 })
         else:
             self._analyze_correlation(coin_id_symbol, rsi_series, session_guid)
@@ -212,7 +219,7 @@ class CryptoAnalyzer:
         self._decrement_processing_counter()
 
     def _decrement_processing_counter(self):
-        """Décrémente le compteur de coins à traiter et publie les résultats finaux si terminé."""
+        """Décrémente le compteur de coins à traiter et publie les résultats finaux si le traitement est terminé."""
         with self._counter_lock:
             self._processing_counter -= 1
             logger.debug(f"Compteur de traitement : {self._processing_counter}")

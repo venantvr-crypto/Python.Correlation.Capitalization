@@ -34,7 +34,7 @@ class DataFetcher(threading.Thread):
         self.work_queue.put(('_fetch_top_coins_task', (event.n, event.session_guid)))
 
     def _handle_fetch_historical_prices_requested(self, event: FetchHistoricalPricesRequested):
-        self.work_queue.put(('_fetch_historical_prices_task', (event.coin_id_symbol, event.weeks, event.session_guid)))
+        self.work_queue.put(('_fetch_historical_prices_task', (event.coin_id_symbol, event.weeks, event.session_guid, event.timeframe)))
 
     def _handle_fetch_precision_data_requested(self, event: FetchPrecisionDataRequested):
         self.work_queue.put(('_fetch_precision_data_task', (event.session_guid,)))
@@ -89,7 +89,7 @@ class DataFetcher(threading.Thread):
         before_sleep=lambda retry_state: logger.warning(
             f"Réessai pour {retry_state.fn.__name__}: tentative {retry_state.attempt_number}")
     )
-    def _fetch_historical_prices_task(self, coin_id_symbol: Tuple[str, str], weeks: int, session_guid: str) -> None:
+    def _fetch_historical_prices_task(self, coin_id_symbol: Tuple[str, str], weeks: int, session_guid: str, timeframe: str) -> None:
         coin_id, coin_symbol = coin_id_symbol
         symbol = f"{coin_symbol.upper()}/USDC"
         if symbol not in self.binance.symbols:
@@ -97,12 +97,11 @@ class DataFetcher(threading.Thread):
             if self.service_bus:
                 self.service_bus.publish("HistoricalPricesFetched",
                                          {'coin_id_symbol': coin_id_symbol, 'prices_df': None,
-                                          'session_guid': session_guid})
+                                          'session_guid': session_guid, 'timeframe': timeframe})
             return
         days = weeks * 7
         end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
-        timeframe = '1d'
         since = int(start_date.timestamp() * 1000)
         ohlc = self.binance.fetch_ohlcv(symbol, timeframe, since=since, limit=days)
         prices_df = pd.DataFrame(
@@ -113,7 +112,7 @@ class DataFetcher(threading.Thread):
         if self.service_bus:
             self.service_bus.publish("HistoricalPricesFetched",
                                      {'coin_id_symbol': coin_id_symbol, 'prices_df': prices_df,
-                                      'session_guid': session_guid})
+                                      'session_guid': session_guid, 'timeframe': timeframe})
 
     @retry(
         stop=stop_after_attempt(3),
