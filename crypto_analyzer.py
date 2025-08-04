@@ -18,12 +18,13 @@ class CryptoAnalyzer:
     """Orchestre l'analyse des corrélations RSI pour le scalping, piloté par les événements."""
 
     def __init__(self, weeks: int = 50, top_n_coins: int = 200, correlation_threshold: float = 0.7,
-                 rsi_period: int = 14, session_guid: Optional[str] = None):
+                 rsi_period: int = 14, session_guid: Optional[str] = None, timeframe: str = '1d'):
         self.weeks = weeks
         self.top_n_coins = top_n_coins
         self.correlation_threshold = correlation_threshold
         self.rsi_period = rsi_period
         self.session_guid = session_guid
+        self.timeframe = timeframe
         self.market_caps: Dict[str, float] = {}
         self.low_cap_threshold: float = float('inf')
         self.btc_prices: Optional[pd.Series] = None
@@ -108,7 +109,7 @@ class CryptoAnalyzer:
             'coins': self.coins,
             'session_guid': self.session_guid,
             'q_percentile': 100.0,
-            'timeframe': '1d'
+            'timeframe': self.timeframe
         })
 
     def _handle_market_cap_threshold_calculated(self, event: MarketCapThresholdCalculated):
@@ -171,9 +172,9 @@ class CryptoAnalyzer:
                     'timeframe': timeframe
                 })
         else:
-            self._analyze_correlation(coin_id_symbol, rsi_series, session_guid)
+            self._analyze_correlation(coin_id_symbol, rsi_series, session_guid, timeframe)
 
-    def _analyze_correlation(self, coin_id_symbol: Tuple[str, str], coin_rsi: pd.Series, session_guid: str):
+    def _analyze_correlation(self, coin_id_symbol: Tuple[str, str], coin_rsi: pd.Series, session_guid: str, timeframe: str):
         """Analyse la corrélation entre le RSI d'un coin et celui de BTC."""
         if self.btc_rsi is None:
             logger.warning("RSI de BTC non disponible pour l'analyse. Ignoré.")
@@ -205,7 +206,7 @@ class CryptoAnalyzer:
             'market_cap': market_cap,
             'low_cap_quartile': low_cap_quartile
         }
-        self.service_bus.publish("CorrelationAnalyzed", {'result': result, 'session_guid': session_guid})
+        self.service_bus.publish("CorrelationAnalyzed", {'result': result, 'session_guid': session_guid, 'timeframe': timeframe})
 
     def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):
         """Ajoute un résultat d'analyse réussi et décrémente le compteur."""
@@ -229,6 +230,7 @@ class CryptoAnalyzer:
                     'results': self.results,
                     'weeks': self.weeks,
                     'session_guid': self.session_guid,
+                    'timeframe': self.timeframe,
                     'db_manager': self.db_manager
                 })
 

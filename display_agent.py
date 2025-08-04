@@ -56,10 +56,11 @@ class DisplayAgent(threading.Thread):
         results = event.results
         weeks = event.weeks
         session_guid = event.session_guid
+        timeframe = event.timeframe
         db_manager = event.db_manager
 
         results = sorted(results, key=lambda x: (-abs(x['correlation']), x['market_cap']))
-        logger.info(f"\nTokens à faible capitalisation avec forte corrélation RSI avec BTC ({weeks} semaines) :")
+        logger.info(f"Tokens à faible capitalisation avec forte corrélation RSI avec BTC ({weeks} semaines) :")
         for result in results:
             logger.info(
                 f"Coin: {result['coin_id']}/{result['coin_symbol']}, Correlation RSI: {result['correlation']:.3f}, "
@@ -68,7 +69,7 @@ class DisplayAgent(threading.Thread):
         logger.info("Résumé de l'historique des corrélations :")
         try:
             if db_manager and session_guid:
-                correlations = db_manager.get_correlations(session_guid=session_guid)
+                correlations = db_manager.get_correlations(session_guid=session_guid, timeframe=timeframe)
                 for row in correlations:
                     logger.info(
                         f"Run: {row[2]}, Coin: {row[0]}/{row[1]}, Correlation: {row[3]:.3f}, Market Cap: ${row[4]:,.2f}, "

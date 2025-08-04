@@ -90,6 +90,7 @@ class CorrelationAnalyzed:
     """Événement indiquant qu'une corrélation a été analysée."""
     result: Optional[Dict]
     session_guid: str
+    timeframe: str
 
 
 @dataclass(frozen=True)
@@ -104,6 +105,7 @@ class FinalResultsReady:
     results: List[Dict]
     weeks: int
     session_guid: str
+    timeframe: str
     db_manager: Any
 
 
