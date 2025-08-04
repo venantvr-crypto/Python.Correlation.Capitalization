@@ -6,7 +6,7 @@ import pandas as pd
 from data_fetcher import DataFetcher
 from database_manager import DatabaseManager
 from display_agent import DisplayAgent
-from events import RunAnalysisRequested, TopCoinsFetched, PrecisionDataFetched, HistoricalPricesFetched, RSICalculated, CorrelationAnalyzed, CoinProcessingFailed, AnalysisJobCompleted
+from events import RunAnalysisRequested, TopCoinsFetched, PrecisionDataFetched, HistoricalPricesFetched, RSICalculated, CorrelationAnalyzed, CoinProcessingFailed, DisplayCompleted, AnalysisJobCompleted
 from logger import logger
 from rsi_calculator import RSICalculator
 from service_bus import ServiceBus
@@ -26,7 +26,6 @@ class AnalysisJob:
     def set_coins_to_process(self, coins: List[Tuple[str, str]]):
         self.coins_to_process = [c for c in coins if c[1].lower() != 'btc']
         with self._counter_lock:
-            # Le compteur inclut BTC + toutes les autres pièces
             self._processing_counter = len(self.coins_to_process) + 1
 
     def decrement_counter(self):
@@ -48,7 +47,6 @@ class AnalysisJob:
             rsi_key = (coin_id, symbol, self.timeframe)
             coin_rsi = self.analyzer.rsi_results.get(rsi_key)
             if coin_rsi is not None:
-                # Appel correct à la méthode de l'analyseur parent
                 self.analyzer.analyze_correlation(
                     coin_id_symbol=(coin_id, symbol),
                     coin_rsi=coin_rsi,
@@ -56,7 +54,6 @@ class AnalysisJob:
                     timeframe=self.timeframe
                 )
 
-        # Une fois toutes les analyses lancées, le job est terminé.
         self.analyzer.service_bus.publish("AnalysisJobCompleted", {'timeframe': self.timeframe})
 
 
@@ -73,25 +70,18 @@ class CryptoAnalyzer:
         self.rsi_period = rsi_period
         self.session_guid = session_guid
         self.timeframes = timeframes
-
-        # Données partagées
         self.market_caps: Dict[str, float] = {}
         self.low_cap_threshold: float = float('inf')
         self.coins: List[Dict] = []
         self.precision_data: Dict[str, Dict] = {}
         self.results: List[Dict] = []
         self.rsi_results: Dict[Tuple[str, str, str], pd.Series] = {}
-
-        # Gestion des jobs par timeframe
         self.analysis_jobs: Dict[str, AnalysisJob] = {tf: AnalysisJob(tf, self) for tf in self.timeframes}
         self._job_completion_counter = len(self.timeframes)
         self._job_lock = threading.Lock()
-
-        # Synchronisation
         self._all_processing_completed = threading.Event()
         self._initial_data_loaded = threading.Event()
 
-        # Composants
         self.service_bus = ServiceBus()
         self.db_manager = DatabaseManager(service_bus=self.service_bus)
         self.data_fetcher = DataFetcher(session_guid=self.session_guid, service_bus=self.service_bus)
@@ -129,7 +119,15 @@ class CryptoAnalyzer:
             logger.info("Données initiales reçues. Filtrage des paires et lancement des jobs.")
 
             usdc_base_symbols = {m['base_asset'] for m in self.precision_data.values() if m['quote_asset'] == 'USDC'}
+            original_coin_count = len(self.coins)
             self.coins = [c for c in self.coins if c.get('symbol', '').upper() in usdc_base_symbols]
+            logger.info(
+                f"Filtrage des top coins : {original_coin_count} -> {len(self.coins)} ayant une paire USDC sur Binance.")
+
+            # AJOUT : Publier les métadonnées de chaque coin pour l'enregistrement en BDD
+            logger.info(f"Enregistrement des métadonnées pour les {len(self.coins)} coins filtrés.")
+            for coin in self.coins:
+                self.service_bus.publish("SingleCoinFetched", {'coin': coin, 'session_guid': self.session_guid})
 
             self.market_caps = {c['symbol'].lower(): c.get('market_cap', 0) for c in self.coins}
             market_cap_values = [mc for mc in self.market_caps.values() if mc > 0]
@@ -142,12 +140,10 @@ class CryptoAnalyzer:
                 job.set_coins_to_process(coins_to_process)
                 logger.info(f"Lancement du job pour le timeframe {timeframe} avec {len(job.coins_to_process) + 1} paires.")
 
-                # Lancer la récupération pour BTC d'abord
                 self.service_bus.publish("FetchHistoricalPricesRequested", {
                     'coin_id_symbol': ('bitcoin', 'btc'), 'weeks': self.weeks,
                     'session_guid': self.session_guid, 'timeframe': timeframe
                 })
-                # Puis pour toutes les autres pièces du job
                 for coin_id, symbol in job.coins_to_process:
                     self.service_bus.publish("FetchHistoricalPricesRequested", {
                         'coin_id_symbol': (coin_id, symbol), 'weeks': self.weeks,
@@ -223,6 +219,11 @@ class CryptoAnalyzer:
                     'results': self.results, 'weeks': self.weeks,
                     'session_guid': self.session_guid, 'timeframes': self.timeframes
                 })
+
+    # noinspection PyUnusedLocal
+    def _handle_display_completed(self, event: DisplayCompleted):
+        self._all_processing_completed.set()
+        logger.info("L'analyse, l'affichage et l'arrêt des services sont terminés.")
 
     def run(self) -> None:
         services = [self.service_bus, self.db_manager, self.data_fetcher, self.rsi_calculator, self.display_agent]

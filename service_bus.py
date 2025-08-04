@@ -3,7 +3,6 @@ import queue
 import threading
 from typing import Callable, Any, Dict
 
-# CORRECTION 1: Importer le nouvel événement
 from events import RunAnalysisRequested, FetchTopCoinsRequested, TopCoinsFetched, SingleCoinFetched, \
     CalculateMarketCapThresholdRequested, MarketCapThresholdCalculated, FetchHistoricalPricesRequested, \
     HistoricalPricesFetched, CalculateRSIRequested, RSICalculated, CorrelationAnalyzed, \
@@ -28,7 +27,6 @@ EVENT_SCHEMAS = {
     "DisplayCompleted": DisplayCompleted,
     "FetchPrecisionDataRequested": FetchPrecisionDataRequested,
     "PrecisionDataFetched": PrecisionDataFetched,
-    # CORRECTION 2: Ajouter l'événement au dictionnaire des schémas
     "AnalysisJobCompleted": AnalysisJobCompleted,
 }
 
