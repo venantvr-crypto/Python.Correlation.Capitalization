@@ -10,6 +10,6 @@ if __name__ == "__main__":
                               top_n_coins=5000,
                               correlation_threshold=0.0,
                               rsi_period=14,
-                              session_guid=session_guid,
-                              timeframes=['1h', '1d'])
-    analyzer.run()
+                              timeframes=['1h', '1d'],
+                              low_cap_percentile=100.0)
+    analyzer.run(session_guid=session_guid)

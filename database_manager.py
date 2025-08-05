@@ -6,7 +6,8 @@ from typing import Optional, List, Tuple, Dict
 
 import pandas as pd
 
-from events import SingleCoinFetched, HistoricalPricesFetched, RSICalculated, CorrelationAnalyzed, PrecisionDataFetched
+from events import SingleCoinFetched, HistoricalPricesFetched, RSICalculated, CorrelationAnalyzed, \
+    PrecisionDataFetched, AnalysisConfigurationProvided
 from logger import logger
 from service_bus import ServiceBus
 
@@ -20,6 +21,7 @@ class DatabaseManager(threading.Thread):
         self.conn = None
         self.cursor = None
         self.service_bus = service_bus
+        self.session_guid: Optional[str] = None
         self.work_queue = queue.Queue()
         self._running = True
 
@@ -28,27 +30,33 @@ class DatabaseManager(threading.Thread):
 
     def _setup_event_subscriptions(self):
         """Abonne les gestionnaires d'événements au bus de services."""
+        self.service_bus.subscribe("AnalysisConfigurationProvided", self._handle_configuration_provided)
         self.service_bus.subscribe("SingleCoinFetched", self._handle_single_coin_fetched)
         self.service_bus.subscribe("HistoricalPricesFetched", self._handle_historical_prices_fetched)
         self.service_bus.subscribe("RSICalculated", self._handle_rsi_calculated)
         self.service_bus.subscribe("CorrelationAnalyzed", self._handle_correlation_analyzed)
         self.service_bus.subscribe("PrecisionDataFetched", self._handle_precision_data_fetched)
 
+    def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
+        """Stocke la configuration de la session."""
+        self.session_guid = event.session_guid
+        logger.info(f"DatabaseManager a reçu la configuration pour la session {self.session_guid}.")
+
     def _handle_single_coin_fetched(self, event: SingleCoinFetched):
         """Met en file d'attente la tâche d'enregistrement d'un token."""
         if event.coin:
-            self.work_queue.put(('_db_save_token', (event.coin, event.session_guid), {}, None))
+            self.work_queue.put(('_db_save_token', (event.coin, self.session_guid), {}, None))
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
         """Met en file d'attente la tâche d'enregistrement des prix."""
         if event.prices_df is not None:
             self.work_queue.put(
-                ('_db_save_prices', (event.coin_id_symbol, event.prices_df, event.session_guid, event.timeframe), {}, None))
+                ('_db_save_prices', (event.coin_id_symbol, event.prices_df, self.session_guid, event.timeframe), {}, None))
 
     def _handle_rsi_calculated(self, event: RSICalculated):
         """Met en file d'attente la tâche d'enregistrement du RSI."""
         if event.rsi is not None:
-            self.work_queue.put(('_db_save_rsi', (event.coin_id_symbol, event.rsi, event.session_guid, event.timeframe), {}, None))
+            self.work_queue.put(('_db_save_rsi', (event.coin_id_symbol, event.rsi, self.session_guid, event.timeframe), {}, None))
 
     def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):
         """Met en file d'attente la tâche d'enregistrement d'une corrélation."""
@@ -60,7 +68,7 @@ class DatabaseManager(threading.Thread):
                 result['correlation'],
                 result['market_cap'],
                 result['low_cap_quartile'],
-                event.session_guid,
+                self.session_guid,
                 event.timeframe
             )
             self.work_queue.put(('_db_save_correlation', task_args, {}, None))
@@ -68,7 +76,7 @@ class DatabaseManager(threading.Thread):
     def _handle_precision_data_fetched(self, event: PrecisionDataFetched):
         """Met en file d'attente la tâche d'enregistrement des données de précision."""
         if event.precision_data:
-            self.work_queue.put(('_db_save_precision_data', (event.precision_data, event.session_guid), {}, None))
+            self.work_queue.put(('_db_save_precision_data', (event.precision_data, self.session_guid), {}, None))
 
     def run(self):
         """Boucle d'exécution du thread qui traite les tâches de la file d'attente."""

@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from events import CalculateRSIRequested
+from events import CalculateRSIRequested, AnalysisConfigurationProvided
 from logger import logger
 from service_bus import ServiceBus
 
@@ -17,14 +17,22 @@ class RSICalculator(threading.Thread):
         super().__init__()
         self.periods = periods
         self.service_bus = service_bus
+        self.session_guid: Optional[str] = None
         self.work_queue = queue.Queue()
         self._running = True
 
         if self.service_bus:
+            self.service_bus.subscribe("AnalysisConfigurationProvided", self._handle_configuration_provided)
             self.service_bus.subscribe("CalculateRSIRequested", self._handle_calculate_rsi_requested)
 
+    def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
+        """Stocke la configuration de la session."""
+        self.session_guid = event.session_guid
+        self.periods = event.rsi_period
+        logger.info(f"RSICalculator a reçu la configuration pour la session {self.session_guid}.")
+
     def _handle_calculate_rsi_requested(self, event: CalculateRSIRequested):
-        self.work_queue.put(('_calculate_rsi_task', (event.coin_id_symbol, event.prices_series, event.session_guid, event.timeframe)))
+        self.work_queue.put(('_calculate_rsi_task', (event.coin_id_symbol, event.prices_series, event.timeframe)))
 
     def run(self):
         logger.info("Thread RSICalculator démarré.")
@@ -49,7 +57,7 @@ class RSICalculator(threading.Thread):
         self.work_queue.put(None)
         self.join()
 
-    def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: pd.Series, session_guid: Optional[str], timeframe: str) -> None:
+    def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: pd.Series, timeframe: str) -> None:
         try:
             if data is None or data.empty or len(data) < self.periods + 1:
                 raise ValueError("Données insuffisantes pour calculer le RSI")
@@ -63,9 +71,9 @@ class RSICalculator(threading.Thread):
             rsi = 100 - (100 / (1 + rs))
             if self.service_bus:
                 self.service_bus.publish("RSICalculated",
-                                         {'coin_id_symbol': coin_id_symbol, 'rsi': rsi, 'session_guid': session_guid, 'timeframe': timeframe})
+                                         {'coin_id_symbol': coin_id_symbol, 'rsi': rsi, 'timeframe': timeframe})
         except Exception as e:
             logger.error(f"Erreur lors du calcul du RSI pour {coin_id_symbol}: {e}")
             if self.service_bus:
                 self.service_bus.publish("RSICalculated",
-                                         {'coin_id_symbol': coin_id_symbol, 'rsi': None, 'session_guid': session_guid, 'timeframe': timeframe})
+                                         {'coin_id_symbol': coin_id_symbol, 'rsi': None, 'timeframe': timeframe})

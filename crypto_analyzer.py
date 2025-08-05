@@ -3,72 +3,31 @@ from typing import Optional, Tuple, List, Dict
 
 import pandas as pd
 
+from analysis_job import AnalysisJob
 from data_fetcher import DataFetcher
 from database_manager import DatabaseManager
 from display_agent import DisplayAgent
-from events import RunAnalysisRequested, TopCoinsFetched, PrecisionDataFetched, HistoricalPricesFetched, RSICalculated, CorrelationAnalyzed, CoinProcessingFailed, DisplayCompleted, AnalysisJobCompleted
+from events import RunAnalysisRequested, TopCoinsFetched, PrecisionDataFetched, HistoricalPricesFetched, RSICalculated, CorrelationAnalyzed, CoinProcessingFailed, DisplayCompleted, AnalysisJobCompleted, AnalysisConfigurationProvided
 from logger import logger
 from rsi_calculator import RSICalculator
 from service_bus import ServiceBus
-
-
-class AnalysisJob:
-    """Contient l'état d'une analyse pour un seul timeframe."""
-
-    def __init__(self, timeframe: str, parent_analyzer):
-        self.timeframe = timeframe
-        self.analyzer = parent_analyzer
-        self.btc_rsi: Optional[pd.Series] = None
-        self.coins_to_process: List[Tuple[str, str]] = []
-        self._processing_counter = 0
-        self._counter_lock = threading.Lock()
-
-    def set_coins_to_process(self, coins: List[Tuple[str, str]]):
-        self.coins_to_process = [c for c in coins if c[1].lower() != 'btc']
-        with self._counter_lock:
-            self._processing_counter = len(self.coins_to_process) + 1
-
-    def decrement_counter(self):
-        with self._counter_lock:
-            self._processing_counter -= 1
-            logger.debug(f"Compteur pour {self.timeframe}: {self._processing_counter}")
-            if self._processing_counter <= 0:
-                logger.info(f"Tous les RSI pour le timeframe {self.timeframe} ont été traités. Lancement des corrélations.")
-                self.start_correlation_analysis()
-
-    def start_correlation_analysis(self):
-        """Lance l'analyse de corrélation pour toutes les pièces traitées de ce job."""
-        if self.btc_rsi is None:
-            logger.error(f"Impossible de lancer l'analyse pour {self.timeframe}: RSI de BTC manquant.")
-            self.analyzer.service_bus.publish("AnalysisJobCompleted", {'timeframe': self.timeframe})
-            return
-
-        for coin_id, symbol in self.coins_to_process:
-            rsi_key = (coin_id, symbol, self.timeframe)
-            coin_rsi = self.analyzer.rsi_results.get(rsi_key)
-            if coin_rsi is not None:
-                self.analyzer.analyze_correlation(
-                    coin_id_symbol=(coin_id, symbol),
-                    coin_rsi=coin_rsi,
-                    btc_rsi=self.btc_rsi,
-                    timeframe=self.timeframe
-                )
-
-        self.analyzer.service_bus.publish("AnalysisJobCompleted", {'timeframe': self.timeframe})
 
 
 class CryptoAnalyzer:
     """Orchestre les analyses de corrélations RSI pour plusieurs timeframes."""
 
     def __init__(self, weeks: int = 50, top_n_coins: int = 200, correlation_threshold: float = 0.7,
-                 rsi_period: int = 14, session_guid: Optional[str] = None, timeframes=None):
+                 rsi_period: int = 14, timeframes=None, low_cap_percentile: float = 25.0):
         if timeframes is None:
             timeframes = ['1d']
         self.weeks = weeks
         self.top_n_coins = top_n_coins
+        # TODO
         self.correlation_threshold = correlation_threshold
         self.rsi_period = rsi_period
-        self.session_guid = session_guid
+        # TODO...
+        self.low_cap_percentile = low_cap_percentile  # 25e percentile pour définir une "faible capitalisation"
+        self.session_guid: Optional[str] = None
         self.timeframes = timeframes
         self.market_caps: Dict[str, float] = {}
         self.low_cap_threshold: float = float('inf')
@@ -84,7 +43,7 @@ class CryptoAnalyzer:
 
         self.service_bus = ServiceBus()
         self.db_manager = DatabaseManager(service_bus=self.service_bus)
-        self.data_fetcher = DataFetcher(session_guid=self.session_guid, service_bus=self.service_bus)
+        self.data_fetcher = DataFetcher(service_bus=self.service_bus)
         self.rsi_calculator = RSICalculator(periods=self.rsi_period, service_bus=self.service_bus)
         self.display_agent = DisplayAgent(service_bus=self.service_bus)
         self._setup_event_subscriptions()
@@ -98,12 +57,12 @@ class CryptoAnalyzer:
         self.service_bus.subscribe("CorrelationAnalyzed", self._handle_correlation_analyzed)
         self.service_bus.subscribe("CoinProcessingFailed", self._handle_coin_processing_failed)
         self.service_bus.subscribe("AnalysisJobCompleted", self._handle_analysis_job_completed)
-        self.service_bus.subscribe("DisplayCompleted", lambda e: self._all_processing_completed.set())
+        self.service_bus.subscribe("DisplayCompleted", self._handle_display_completed)
 
     def _handle_run_analysis_requested(self, event: RunAnalysisRequested):
         logger.info("Démarrage de l'analyse, demande des données de précision et de la liste des top coins.")
-        self.service_bus.publish("FetchPrecisionDataRequested", {'session_guid': event.session_guid})
-        self.service_bus.publish("FetchTopCoinsRequested", {'n': self.top_n_coins, 'session_guid': event.session_guid})
+        self.service_bus.publish("FetchPrecisionDataRequested", {})
+        self.service_bus.publish("FetchTopCoinsRequested", {'n': self.top_n_coins})
 
     def _handle_precision_data_fetched(self, event: PrecisionDataFetched):
         self.precision_data = {item['symbol']: item for item in event.precision_data}
@@ -127,12 +86,15 @@ class CryptoAnalyzer:
             # AJOUT : Publier les métadonnées de chaque coin pour l'enregistrement en BDD
             logger.info(f"Enregistrement des métadonnées pour les {len(self.coins)} coins filtrés.")
             for coin in self.coins:
-                self.service_bus.publish("SingleCoinFetched", {'coin': coin, 'session_guid': self.session_guid})
+                self.service_bus.publish("SingleCoinFetched", {'coin': coin})
 
             self.market_caps = {c['symbol'].lower(): c.get('market_cap', 0) for c in self.coins}
             market_cap_values = [mc for mc in self.market_caps.values() if mc > 0]
-            self.low_cap_threshold = pd.Series(market_cap_values).quantile(0.25) if market_cap_values else float('inf')
-            logger.info(f"Seuil de faible capitalisation (25e percentile) fixé à : ${self.low_cap_threshold:,.2f}")
+            if market_cap_values:
+                self.low_cap_threshold = pd.Series(market_cap_values).quantile(self.low_cap_percentile / 100)
+            else:
+                self.low_cap_threshold = float('inf')
+            logger.info(f"Seuil de faible capitalisation ({self.low_cap_percentile}e percentile) fixé à : ${self.low_cap_threshold:,.2f}")
 
             coins_to_process = [(c['id'], c['symbol']) for c in self.coins]
 
@@ -141,13 +103,11 @@ class CryptoAnalyzer:
                 logger.info(f"Lancement du job pour le timeframe {timeframe} avec {len(job.coins_to_process) + 1} paires.")
 
                 self.service_bus.publish("FetchHistoricalPricesRequested", {
-                    'coin_id_symbol': ('bitcoin', 'btc'), 'weeks': self.weeks,
-                    'session_guid': self.session_guid, 'timeframe': timeframe
+                    'coin_id_symbol': ('bitcoin', 'btc'), 'weeks': self.weeks, 'timeframe': timeframe
                 })
                 for coin_id, symbol in job.coins_to_process:
                     self.service_bus.publish("FetchHistoricalPricesRequested", {
-                        'coin_id_symbol': (coin_id, symbol), 'weeks': self.weeks,
-                        'session_guid': self.session_guid, 'timeframe': timeframe
+                        'coin_id_symbol': (coin_id, symbol), 'weeks': self.weeks, 'timeframe': timeframe
                     })
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
@@ -155,8 +115,7 @@ class CryptoAnalyzer:
             self.service_bus.publish("CoinProcessingFailed", {'coin_id_symbol': event.coin_id_symbol, 'timeframe': event.timeframe})
             return
         self.service_bus.publish("CalculateRSIRequested", {
-            'coin_id_symbol': event.coin_id_symbol, 'prices_series': event.prices_df['close'],
-            'session_guid': event.session_guid, 'timeframe': event.timeframe
+            'coin_id_symbol': event.coin_id_symbol, 'prices_series': event.prices_df['close'], 'timeframe': event.timeframe
         })
 
     def _handle_rsi_calculated(self, event: RSICalculated):
@@ -203,7 +162,7 @@ class CryptoAnalyzer:
             'market_cap': market_cap,
             'low_cap_quartile': low_cap_quartile
         }
-        self.service_bus.publish("CorrelationAnalyzed", {'result': result, 'session_guid': self.session_guid, 'timeframe': timeframe})
+        self.service_bus.publish("CorrelationAnalyzed", {'result': result, 'timeframe': timeframe})
 
     def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):
         if event.result:
@@ -216,8 +175,7 @@ class CryptoAnalyzer:
             if self._job_completion_counter <= 0:
                 logger.info("Tous les jobs d'analyse sont terminés.")
                 self.service_bus.publish("FinalResultsReady", {
-                    'results': self.results, 'weeks': self.weeks,
-                    'session_guid': self.session_guid, 'timeframes': self.timeframes
+                    'results': self.results, 'weeks': self.weeks, 'timeframes': self.timeframes
                 })
 
     # noinspection PyUnusedLocal
@@ -225,11 +183,27 @@ class CryptoAnalyzer:
         self._all_processing_completed.set()
         logger.info("L'analyse, l'affichage et l'arrêt des services sont terminés.")
 
-    def run(self) -> None:
+    def run(self, session_guid: str) -> None:
+        self.session_guid = session_guid
         services = [self.service_bus, self.db_manager, self.data_fetcher, self.rsi_calculator, self.display_agent]
         for service in services:
             service.start()
-        self.service_bus.publish("RunAnalysisRequested", {'session_guid': self.session_guid})
+
+        # Publier la configuration globale pour tous les services
+        config_payload = AnalysisConfigurationProvided(
+            session_guid=self.session_guid,
+            weeks=self.weeks,
+            top_n_coins=self.top_n_coins,
+            correlation_threshold=self.correlation_threshold,
+            rsi_period=self.rsi_period,
+            timeframes=self.timeframes,
+            low_cap_percentile=self.low_cap_percentile
+        )
+        self.service_bus.publish("AnalysisConfigurationProvided", config_payload)
+
+        # Lancer l'analyse
+        self.service_bus.publish("RunAnalysisRequested", {})
+
         self._all_processing_completed.wait()
         for service in reversed(services):
             service.stop()

@@ -2,7 +2,7 @@ import queue
 import threading
 from typing import Optional
 
-from events import FinalResultsReady
+from events import FinalResultsReady, AnalysisConfigurationProvided
 from logger import logger
 from service_bus import ServiceBus
 
@@ -13,11 +13,18 @@ class DisplayAgent(threading.Thread):
     def __init__(self, service_bus: Optional[ServiceBus] = None):
         super().__init__()
         self.service_bus = service_bus
+        self.session_guid: Optional[str] = None
         self.work_queue = queue.Queue()
         self._running = True
 
         if self.service_bus:
+            self.service_bus.subscribe("AnalysisConfigurationProvided", self._handle_configuration_provided)
             self.service_bus.subscribe("FinalResultsReady", self._handle_final_results_ready)
+
+    def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
+        """Stocke la configuration de la session."""
+        self.session_guid = event.session_guid
+        logger.info(f"DisplayAgent a reçu la configuration pour la session {self.session_guid}.")
 
     def _handle_final_results_ready(self, event: FinalResultsReady):
         """Reçoit l'événement et ajoute la tâche à la file d'attente."""

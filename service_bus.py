@@ -4,19 +4,18 @@ import threading
 from typing import Callable, Any, Dict
 
 from events import RunAnalysisRequested, FetchTopCoinsRequested, TopCoinsFetched, SingleCoinFetched, \
-    CalculateMarketCapThresholdRequested, MarketCapThresholdCalculated, FetchHistoricalPricesRequested, \
+    FetchHistoricalPricesRequested, \
     HistoricalPricesFetched, CalculateRSIRequested, RSICalculated, CorrelationAnalyzed, \
     CoinProcessingFailed, FinalResultsReady, DisplayCompleted, FetchPrecisionDataRequested, PrecisionDataFetched, \
-    AnalysisJobCompleted
+    AnalysisJobCompleted, AnalysisConfigurationProvided
 from logger import logger
 
 EVENT_SCHEMAS = {
+    "AnalysisConfigurationProvided": AnalysisConfigurationProvided,
     "RunAnalysisRequested": RunAnalysisRequested,
     "FetchTopCoinsRequested": FetchTopCoinsRequested,
     "TopCoinsFetched": TopCoinsFetched,
     "SingleCoinFetched": SingleCoinFetched,
-    "CalculateMarketCapThresholdRequested": CalculateMarketCapThresholdRequested,
-    "MarketCapThresholdCalculated": MarketCapThresholdCalculated,
     "FetchHistoricalPricesRequested": FetchHistoricalPricesRequested,
     "HistoricalPricesFetched": HistoricalPricesFetched,
     "CalculateRSIRequested": CalculateRSIRequested,
@@ -64,9 +63,13 @@ class ServiceBus(threading.Thread):
 
         try:
             event_class = EVENT_SCHEMAS.get(event_name)
-            if event_class and isinstance(payload, Dict):
-                # noinspection PyArgumentList
-                validated_payload = event_class(**payload)
+            if event_class:
+                # Si le payload est déjà une instance du dataclass, ne rien faire. Sinon, le créer.
+                if not isinstance(payload, event_class):
+                    # noinspection PyArgumentList
+                    validated_payload = event_class(**payload)
+                else:
+                    validated_payload = payload
             else:
                 validated_payload = payload
         except Exception as e:
