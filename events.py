@@ -3,6 +3,9 @@ from typing import List, Dict, Tuple, Optional
 
 import pandas as pd
 
+# Importation de la nouvelle classe de configuration
+from configuration import AnalysisConfig
+
 
 @dataclass(frozen=True)
 class AnalysisConfigurationProvided:
@@ -11,12 +14,7 @@ class AnalysisConfigurationProvided:
     Contient tous les paramètres transversaux de la session d'analyse.
     """
     session_guid: str
-    weeks: int
-    top_n_coins: int
-    correlation_threshold: float
-    rsi_period: int
-    timeframes: List[str]
-    low_cap_percentile: float
+    config: AnalysisConfig
 
 
 @dataclass(frozen=True)

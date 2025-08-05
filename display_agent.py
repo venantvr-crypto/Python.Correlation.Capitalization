@@ -56,7 +56,6 @@ class DisplayAgent(threading.Thread):
     # noinspection PyMethodMayBeStatic
     def _display_results(self, event: FinalResultsReady):
         """Affiche les résultats finaux."""
-        # CORRECTION : Utiliser les résultats et timeframes directement depuis l'événement
         results = event.results
         weeks = event.weeks
         timeframes_str = ", ".join(event.timeframes)

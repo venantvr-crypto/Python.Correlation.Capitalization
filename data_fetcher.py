@@ -132,7 +132,6 @@ class DataFetcher(threading.Thread):
             markets = self.binance.load_markets()
             precision_data = []
             for symbol, market_info in markets.items():
-                # MODIFICATION : On ne filtre plus sur 'USDC', on prend tous les marchés actifs.
                 if market_info.get('active'):
                     # Chercher les filtres PRICE_FILTER et LOT_SIZE
                     lot_size_filter = next((f for f in market_info['info']['filters']

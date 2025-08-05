@@ -13,9 +13,9 @@ from service_bus import ServiceBus
 class RSICalculator(threading.Thread):
     """Calcule le RSI pour une série de prix dans son propre thread."""
 
-    def __init__(self, periods: int = 14, service_bus: Optional[ServiceBus] = None):
+    def __init__(self, service_bus: Optional[ServiceBus] = None):
         super().__init__()
-        self.periods = periods
+        self.periods: Optional[int] = None
         self.service_bus = service_bus
         self.session_guid: Optional[str] = None
         self.work_queue = queue.Queue()
@@ -28,7 +28,7 @@ class RSICalculator(threading.Thread):
     def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
         """Stocke la configuration de la session."""
         self.session_guid = event.session_guid
-        self.periods = event.rsi_period
+        self.periods = event.config.rsi_period
         logger.info(f"RSICalculator a reçu la configuration pour la session {self.session_guid}.")
 
     def _handle_calculate_rsi_requested(self, event: CalculateRSIRequested):
@@ -59,6 +59,8 @@ class RSICalculator(threading.Thread):
 
     def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: pd.Series, timeframe: str) -> None:
         try:
+            if self.periods is None:
+                raise ValueError("La période RSI n'a pas été configurée.")
             if data is None or data.empty or len(data) < self.periods + 1:
                 raise ValueError("Données insuffisantes pour calculer le RSI")
 

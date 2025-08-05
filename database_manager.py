@@ -6,8 +6,7 @@ from typing import Optional, List, Tuple, Dict
 
 import pandas as pd
 
-from events import SingleCoinFetched, HistoricalPricesFetched, RSICalculated, CorrelationAnalyzed, \
-    PrecisionDataFetched, AnalysisConfigurationProvided
+from events import SingleCoinFetched, HistoricalPricesFetched, RSICalculated, CorrelationAnalyzed, PrecisionDataFetched, AnalysisConfigurationProvided
 from logger import logger
 from service_bus import ServiceBus
 
