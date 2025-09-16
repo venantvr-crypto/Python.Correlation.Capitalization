@@ -146,9 +146,13 @@ class CryptoAnalyzer:
         market_cap = self.market_caps.get(coin_id_symbol[1].lower(), 0)
         low_cap_quartile = market_cap <= self.low_cap_threshold
 
-        if pd.isna(correlation) or abs(correlation) < self.config.correlation_threshold or not low_cap_quartile:
+        # Filtrer les corrélations significatives
+        # On garde les corrélations fortes (positives ou négatives) ET dans le quartile bas de capitalisation
+        if pd.isna(correlation) or abs(correlation) < self.config.correlation_threshold:
             return
 
+        # On peut vouloir sauvegarder toutes les corrélations significatives,
+        # même celles qui ne sont pas dans le quartile bas, pour analyse ultérieure
         result = {
             'coin_id': coin_id_symbol[0],
             'coin_symbol': coin_id_symbol[1],

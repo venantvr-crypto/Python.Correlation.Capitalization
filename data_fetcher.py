@@ -109,7 +109,19 @@ class DataFetcher(threading.Thread):
         end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
         since = int(start_date.timestamp() * 1000)
-        ohlc = self.binance.fetch_ohlcv(symbol, timeframe, since=since, limit=days)
+
+        # Calculer le nombre correct de bougies selon le timeframe
+        timeframe_minutes = {
+            '1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30,
+            '1h': 60, '2h': 120, '4h': 240, '6h': 360, '8h': 480, '12h': 720,
+            '1d': 1440, '3d': 4320, '1w': 10080, '1M': 43200
+        }
+
+        minutes_per_candle = timeframe_minutes.get(timeframe, 60)  # Par défaut 1h si non trouvé
+        total_minutes = days * 24 * 60
+        limit = min(total_minutes // minutes_per_candle, 1000)  # Binance a une limite max de 1000
+
+        ohlc = self.binance.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
         prices_df = pd.DataFrame(
             ohlc,
             columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],

@@ -1,0 +1,27 @@
+[flake8]
+max-line-length = 120
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    build,
+    dist,
+    htmlcov,
+    .pytest_cache,
+    .mypy_cache,
+    tests
+ignore =
+    # E501: line too long (handled by black)
+    E501,
+    # W503: line break before binary operator (black prefers this)
+    W503,
+    # E203: whitespace before ':' (black adds this)
+    E203,
+    # E266: too many leading '#' for block comment
+    E266,
+    # E704: multiple statements on one line (def)
+    E704
+per-file-ignores =
+    __init__.py:F401
+max-complexity = 10

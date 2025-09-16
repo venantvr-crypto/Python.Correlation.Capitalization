@@ -64,13 +64,21 @@ class RSICalculator(threading.Thread):
             if data is None or data.empty or len(data) < self.periods + 1:
                 raise ValueError("Données insuffisantes pour calculer le RSI")
 
-            data = data[:-1]
+            # Calculer le RSI sans supprimer la dernière valeur
+            # La suppression pourrait être liée à un problème de synchronisation, mais
+            # elle n'est pas nécessaire pour le calcul du RSI
             delta = data.diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=self.periods).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=self.periods).mean()
+
+            # Éviter la division par zéro
             loss = loss.replace(0, np.nan)
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
+
+            # Retirer les valeurs NaN du début (les premières périodes n'ont pas assez de données)
+            rsi = rsi.dropna()
+
             if self.service_bus:
                 self.service_bus.publish("RSICalculated",
                                          {'coin_id_symbol': coin_id_symbol, 'rsi': rsi, 'timeframe': timeframe})

@@ -108,6 +108,7 @@ class DatabaseManager(threading.Thread):
 
     def stop(self):
         """Arrête le thread en toute sécurité."""
+        self._running = False
         self.work_queue.put(None)
         self.join()
 
@@ -149,7 +150,7 @@ class DatabaseManager(threading.Thread):
             self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS precision_data (
                     symbol TEXT, quote_asset TEXT NOT NULL, base_asset TEXT NOT NULL,
-                    status TEXT NOT NULL, base_asset_precision INTEGER NOT NULL, step_size REAL NOT NULL,
+                    status BOOLEAN NOT NULL, base_asset_precision INTEGER NOT NULL, step_size REAL NOT NULL,
                     min_qty REAL NOT NULL, tick_size REAL NOT NULL, min_notional REAL NOT NULL,
                     session_guid TEXT,
                     PRIMARY KEY (symbol, quote_asset, base_asset, session_guid)
@@ -183,6 +184,7 @@ class DatabaseManager(threading.Thread):
     def _db_save_token(self, coin: Dict, session_guid: Optional[str]) -> None:
         """Tâche interne pour enregistrer les informations d'un token."""
         coin_id = coin.get('id')
+        coin_symbol = coin.get('symbol', '').upper()
         try:
             if not coin_id:
                 logger.error("Clé 'id' manquante dans le payload du token.")
@@ -208,7 +210,7 @@ class DatabaseManager(threading.Thread):
                 return str(value) if value is not None else None
 
             values = (
-                coin_id, session_guid, safe_str(coin.get('symbol')), safe_str(coin.get('name')),
+                coin_id, coin_symbol, session_guid, safe_str(coin.get('symbol')), safe_str(coin.get('name')),
                 safe_str(coin.get('image')), safe_float(coin.get('current_price')),
                 safe_int(coin.get('market_cap')), safe_int(coin.get('market_cap_rank')),
                 safe_int(coin.get('fully_diluted_valuation')), safe_int(coin.get('total_volume')),
@@ -222,14 +224,14 @@ class DatabaseManager(threading.Thread):
                 safe_str(coin.get('atl_date')), safe_str(coin.get('roi')), safe_str(coin.get('last_updated'))
             )
             self.cursor.execute('''
-                INSERT INTO tokens (
-                    coin_id, session_guid, symbol, name, image, current_price, market_cap, market_cap_rank,
+                INSERT OR REPLACE INTO tokens (
+                    coin_id, coin_symbol, session_guid, symbol, name, image, current_price, market_cap, market_cap_rank,
                     fully_diluted_valuation, total_volume, high_24h, low_24h, price_change_24h,
                     price_change_percentage_24h, market_cap_change_24h, market_cap_change_percentage_24h,
                     circulating_supply, total_supply, max_supply, ath, ath_change_percentage,
                     ath_date, atl, atl_change_percentage, atl_date, roi, last_updated
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', values)
             self.conn.commit()
             logger.info(f"Token {coin_id} enregistré avec session_guid={session_guid}.")
