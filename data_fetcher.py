@@ -1,50 +1,55 @@
 import queue
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import ccxt
 import pandas as pd
+import requests
 from pycoingecko import CoinGeckoAPI
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from events import FetchTopCoinsRequested, FetchHistoricalPricesRequested, FetchPrecisionDataRequested, \
-    AnalysisConfigurationProvided
+from events import (
+    AnalysisConfigurationProvided,
+    FetchHistoricalPricesRequested,
+    FetchPrecisionDataRequested,
+    FetchTopCoinsRequested,
+    HistoricalPricesFetched,
+    PrecisionDataFetched,
+    TopCoinsFetched,
+)
 from logger import logger
 from service_bus import ServiceBus
 
 
 class DataFetcher(threading.Thread):
-    """Récupère les données de marché dans son propre thread."""
+    """Récupère les données de marché avec une gestion robuste des erreurs et des limites d'API."""
 
     def __init__(self, service_bus: Optional[ServiceBus] = None):
         super().__init__()
         self.cg = CoinGeckoAPI()
-        self.binance = ccxt.binance()
+
+        # Active le rate limiter de CCXT pour respecter les limites de l'API Binance
+        self.binance = ccxt.binance(
+            {
+                "enableRateLimit": True,
+                "timeout": 30000,  # 30 secondes en millisecondes
+            }
+        )
+
         self.session_guid: Optional[str] = None
         self.service_bus = service_bus
         self.work_queue = queue.Queue()
         self._running = True
 
         if self.service_bus:
-            self.service_bus.subscribe("AnalysisConfigurationProvided", self._handle_configuration_provided)
-            self.service_bus.subscribe("FetchTopCoinsRequested", self._handle_fetch_top_coins_requested)
-            self.service_bus.subscribe("FetchHistoricalPricesRequested", self._handle_fetch_historical_prices_requested)
-            self.service_bus.subscribe("FetchPrecisionDataRequested", self._handle_fetch_precision_data_requested)
+            self._setup_event_subscriptions()
 
-    def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
-        """Stocke la configuration de la session."""
-        self.session_guid = event.session_guid
-        logger.info(f"DataFetcher a reçu la configuration pour la session {self.session_guid}.")
-
-    def _handle_fetch_top_coins_requested(self, event: FetchTopCoinsRequested):
-        self.work_queue.put(('_fetch_top_coins_task', (event.n,)))
-
-    def _handle_fetch_historical_prices_requested(self, event: FetchHistoricalPricesRequested):
-        self.work_queue.put(('_fetch_historical_prices_task', (event.coin_id_symbol, event.weeks, event.timeframe)))
-
-    def _handle_fetch_precision_data_requested(self, event: FetchPrecisionDataRequested):
-        self.work_queue.put(('_fetch_precision_data_task', ()))
+    def _setup_event_subscriptions(self):
+        self.service_bus.subscribe("AnalysisConfigurationProvided", self._handle_configuration_provided)
+        self.service_bus.subscribe("FetchTopCoinsRequested", self._handle_fetch_top_coins_requested)
+        self.service_bus.subscribe("FetchHistoricalPricesRequested", self._handle_fetch_historical_prices_requested)
+        self.service_bus.subscribe("FetchPrecisionDataRequested", self._handle_fetch_precision_data_requested)
 
     def run(self):
         logger.info("Thread DataFetcher démarré.")
@@ -52,8 +57,7 @@ class DataFetcher(threading.Thread):
             try:
                 task = self.work_queue.get(timeout=1)
                 if task is None:
-                    continue
-
+                    break
                 method_name, args = task
                 method = getattr(self, method_name)
                 method(*args)
@@ -61,7 +65,7 @@ class DataFetcher(threading.Thread):
             except queue.Empty:
                 continue
             except Exception as e:
-                logger.error(f"Erreur d'exécution de la tâche dans DataFetcher: {e}")
+                logger.error(f"Erreur d'exécution de la tâche dans DataFetcher: {e}", exc_info=True)
         logger.info("Thread DataFetcher arrêté.")
 
     def stop(self):
@@ -69,108 +73,150 @@ class DataFetcher(threading.Thread):
         self.work_queue.put(None)
         self.join()
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type((ccxt.NetworkError, ccxt.ExchangeError)),
-        before_sleep=lambda retry_state: logger.warning(
-            f"Réessai pour {retry_state.fn.__name__}: tentative {retry_state.attempt_number}")
-    )
     def _fetch_top_coins_task(self, n: int) -> None:
+        """Récupère les N top coins en réessayant chaque page individuellement en cas d'erreur réseau."""
         coins = []
         pages = (n + 99) // 100
+        logger.info(f"Début de la récupération de {n} coins sur {pages} pages depuis CoinGecko...")
+
+        @retry(
+            stop=stop_after_attempt(4),
+            wait=wait_exponential(multiplier=2, min=5, max=30),
+            retry=retry_if_exception_type(requests.exceptions.RequestException),
+            before_sleep=lambda retry_state: logger.warning(
+                f"Erreur réseau avec CoinGecko. Réessai de la page dans {int(retry_state.next_action.sleep)}s... (Tentative {retry_state.attempt_number})"
+            ),
+        )
+        def fetch_one_page(page_num: int) -> List[dict]:
+            logger.info(f"Récupération de la page {page_num}/{pages} de CoinGecko...")
+            return self.cg.get_coins_markets(vs_currency="usd", per_page=100, page=page_num, timeout=30)
+
         for page in range(1, pages + 1):
             try:
-                new_coins = self.cg.get_coins_markets(vs_currency='usd', per_page=100, page=page)
+                new_coins = fetch_one_page(page)
+                if not new_coins:
+                    logger.warning(f"La page {page} de CoinGecko n'a retourné aucune donnée, arrêt de la collecte.")
+                    break
                 coins.extend(new_coins)
-            except Exception as e:
-                logger.error(f"Erreur lors de la récupération des coins, page {page}: {e}")
-                continue
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Échec final de la récupération de la page {page} après plusieurs tentatives: {e}")
+                logger.warning("Arrêt de la collecte des top coins en raison d'une erreur réseau persistante.")
+                break
+
+        logger.info(f"Récupération depuis CoinGecko terminée. {len(coins)} coins trouvés.")
         if self.service_bus:
-            self.service_bus.publish("TopCoinsFetched", {'coins': coins[:n]})
+            self.service_bus.publish("TopCoinsFetched", TopCoinsFetched(coins=coins[:n]))
 
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type((ccxt.NetworkError, ccxt.ExchangeError)),
-        before_sleep=lambda retry_state: logger.warning(
-            f"Réessai pour {retry_state.fn.__name__}: tentative {retry_state.attempt_number}")
+        wait=wait_exponential(multiplier=2, min=5, max=20),
+        retry=retry_if_exception_type(ccxt.NetworkError),
+        before_sleep=lambda rs: logger.warning(
+            f"Erreur réseau sur Binance pour {rs.args[0][1]}. Réessai dans {int(rs.next_action.sleep)}s..."
+        ),
     )
     def _fetch_historical_prices_task(self, coin_id_symbol: Tuple[str, str], weeks: int, timeframe: str) -> None:
         coin_id, coin_symbol = coin_id_symbol
         symbol = f"{coin_symbol.upper()}/USDC"
-        if symbol not in self.binance.symbols:
-            logger.warning(f"Symbole {symbol} introuvable sur Binance.")
-            if self.service_bus:
-                self.service_bus.publish("HistoricalPricesFetched",
-                                         {'coin_id_symbol': coin_id_symbol, 'prices_df': None, 'timeframe': timeframe})
-            return
-        days = weeks * 7
-        end_date = datetime.now(timezone.utc)
-        start_date = end_date - timedelta(days=days)
-        since = int(start_date.timestamp() * 1000)
 
-        # Calculer le nombre correct de bougies selon le timeframe
-        timeframe_minutes = {
-            '1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30,
-            '1h': 60, '2h': 120, '4h': 240, '6h': 360, '8h': 480, '12h': 720,
-            '1d': 1440, '3d': 4320, '1w': 10080, '1M': 43200
-        }
+        logger.info(f"Récupération des prix pour {symbol} sur le timeframe {timeframe}...")
 
-        minutes_per_candle = timeframe_minutes.get(timeframe, 60)  # Par défaut 1h si non trouvé
-        total_minutes = days * 24 * 60
-        limit = min(total_minutes // minutes_per_candle, 1000)  # Binance a une limite max de 1000
+        prices_df = None
+        try:
+            if not self.binance.markets:
+                self.binance.load_markets()
 
-        ohlc = self.binance.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
-        prices_df = pd.DataFrame(
-            ohlc,
-            columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'],
-            index=[datetime.fromtimestamp(x[0] / 1000, tz=timezone.utc) for x in ohlc]
-        )
+            if symbol in self.binance.markets:
+                days = weeks * 7
+                since = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000)
+                ohlcv = self.binance.fetch_ohlcv(symbol, timeframe, since=since, limit=1000)
+                if ohlcv:
+                    prices_df = pd.DataFrame(
+                        ohlcv,
+                        columns=["timestamp", "open", "high", "low", "close", "volume"],
+                        index=[datetime.fromtimestamp(x[0] / 1000, tz=timezone.utc) for x in ohlcv],
+                    )
+        except Exception as e:
+            logger.error(f"Échec final de la récupération des prix pour {symbol}: {e}")
+
         if self.service_bus:
-            self.service_bus.publish("HistoricalPricesFetched",
-                                     {'coin_id_symbol': coin_id_symbol, 'prices_df': prices_df, 'timeframe': timeframe})
+            # MODIFICATION : Sérialiser le DataFrame en chaîne JSON avant de publier.
+            prices_json = prices_df.to_json(orient="split") if prices_df is not None else None
+
+            event_payload = HistoricalPricesFetched(
+                coin_id_symbol=coin_id_symbol, prices_df_json=prices_json, timeframe=timeframe
+            )
+            self.service_bus.publish("HistoricalPricesFetched", event_payload)
 
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type((ccxt.NetworkError, ccxt.ExchangeError)),
-        before_sleep=lambda retry_state: logger.warning(
-            f"Réessai pour {retry_state.fn.__name__}: tentative {retry_state.attempt_number}")
+        wait=wait_exponential(multiplier=2, min=5, max=20),
+        retry=retry_if_exception_type(ccxt.NetworkError),
+        before_sleep=lambda rs: logger.warning(
+            f"Erreur réseau sur Binance. Réessai dans {int(rs.next_action.sleep)}s..."
+        ),
     )
     def _fetch_precision_data_task(self) -> None:
-        """Récupère les données de précision pour TOUS les marchés actifs sur Binance."""
+        precision_data = []
         try:
+            logger.info("Récupération des données de précision de tous les marchés Binance...")
             markets = self.binance.load_markets()
-            precision_data = []
-            for symbol, market_info in markets.items():
-                if market_info.get('active'):
-                    # Chercher les filtres PRICE_FILTER et LOT_SIZE
-                    lot_size_filter = next((f for f in market_info['info']['filters']
-                                            if f['filterType'] == 'LOT_SIZE'), None)
+            for market_info in markets.values():
+                if market_info.get("active"):
+                    lot_size_filter = next(
+                        (
+                            f
+                            for f in market_info.get("info", {}).get("filters", [])
+                            if f.get("filterType") == "LOT_SIZE"
+                        ),
+                        None,
+                    )
                     price_filter = next(
-                        (f for f in market_info['info']['filters'] if f['filterType'] == 'PRICE_FILTER'), None)
-                    notional_filter = next((f for f in market_info['info']['filters']
-                                            if f['filterType'] == 'NOTIONAL'), None)
+                        (
+                            f
+                            for f in market_info.get("info", {}).get("filters", [])
+                            if f.get("filterType") == "PRICE_FILTER"
+                        ),
+                        None,
+                    )
+                    notional_filter = next(
+                        (
+                            f
+                            for f in market_info.get("info", {}).get("filters", [])
+                            if f.get("filterType") == "NOTIONAL"
+                        ),
+                        None,
+                    )
 
                     if lot_size_filter and price_filter and notional_filter:
                         data = {
-                            'symbol': market_info['symbol'],
-                            'quote_asset': market_info['quote'],
-                            'base_asset': market_info['base'],
-                            'status': market_info['active'],
-                            'base_asset_precision': market_info['info']['baseAssetPrecision'],
-                            'step_size': lot_size_filter['stepSize'],
-                            'min_qty': lot_size_filter['minQty'],
-                            'tick_size': price_filter['tickSize'],
-                            'min_notional': notional_filter['minNotional'],
+                            "symbol": market_info.get("symbol"),
+                            "quote_asset": market_info.get("quote"),
+                            "base_asset": market_info.get("base"),
+                            "status": market_info.get("active"),
+                            "base_asset_precision": market_info.get("info", {}).get("baseAssetPrecision"),
+                            "step_size": lot_size_filter.get("stepSize"),
+                            "min_qty": lot_size_filter.get("minQty"),
+                            "tick_size": price_filter.get("tickSize"),
+                            "min_notional": notional_filter.get("minNotional"),
                         }
                         precision_data.append(data)
-
-            if self.service_bus:
-                logger.info(f"Envoi de {len(precision_data)} paires de précision de marché depuis Binance.")
-                self.service_bus.publish("PrecisionDataFetched", {'precision_data': precision_data})
+            logger.info(f"{len(precision_data)} marchés actifs trouvés sur Binance.")
         except Exception as e:
-            logger.error(f"Erreur lors de la récupération des données de précision: {e}")
-            if self.service_bus:
-                self.service_bus.publish("PrecisionDataFetched", {'precision_data': []})
+            logger.error(f"Échec de la récupération des données de précision de Binance: {e}")
+
+        if self.service_bus:
+            self.service_bus.publish("PrecisionDataFetched", PrecisionDataFetched(precision_data=precision_data))
+
+    def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
+        self.session_guid = event.session_guid
+        logger.info(f"DataFetcher a reçu la configuration pour la session {self.session_guid}.")
+
+    def _handle_fetch_top_coins_requested(self, event: FetchTopCoinsRequested):
+        self.work_queue.put(("_fetch_top_coins_task", (event.n,)))
+
+    def _handle_fetch_historical_prices_requested(self, event: FetchHistoricalPricesRequested):
+        self.work_queue.put(("_fetch_historical_prices_task", (event.coin_id_symbol, event.weeks, event.timeframe)))
+
+    def _handle_fetch_precision_data_requested(self, _event: FetchPrecisionDataRequested):
+        self.work_queue.put(("_fetch_precision_data_task", ()))
