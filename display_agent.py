@@ -1,26 +1,19 @@
-import queue
-import threading
 from typing import Optional
+
+from pubsub import QueueWorkerThread, ServiceBus
 
 from events import AnalysisConfigurationProvided, DisplayCompleted, FinalResultsReady
 from logger import logger
-from service_bus import ServiceBus
 
 
-class DisplayAgent(threading.Thread):
+class DisplayAgent(QueueWorkerThread):
     """Agent responsable de l'affichage final des résultats dans son propre thread."""
 
     def __init__(self, service_bus: Optional[ServiceBus] = None):
-        super().__init__()
-        self.service_bus = service_bus
+        super().__init__(service_bus=service_bus, name="DisplayAgent")
         self.session_guid: Optional[str] = None
-        self.work_queue = queue.Queue()
-        self._running = True
 
-        if self.service_bus:
-            self._setup_event_subscriptions()
-
-    def _setup_event_subscriptions(self):
+    def setup_event_subscriptions(self) -> None:
         self.service_bus.subscribe("AnalysisConfigurationProvided", self._handle_configuration_provided)
         self.service_bus.subscribe("FinalResultsReady", self._handle_final_results_ready)
 
@@ -29,28 +22,12 @@ class DisplayAgent(threading.Thread):
         logger.info(f"DisplayAgent a reçu la configuration pour la session {self.session_guid}.")
 
     def _handle_final_results_ready(self, event: FinalResultsReady):
-        self.work_queue.put(event)
+        self.add_task("_display_results_and_publish", event)
 
-    def run(self):
-        logger.info("Thread DisplayAgent démarré.")
-        while self._running:
-            try:
-                event = self.work_queue.get(timeout=1)
-                if event is None:
-                    continue
-                self._display_results(event)
-                self.work_queue.task_done()
-                self.service_bus.publish("DisplayCompleted", DisplayCompleted())
-            except queue.Empty:
-                continue
-            except Exception as e:
-                logger.error(f"Erreur d'exécution de la tâche dans DisplayAgent: {e}")
-        logger.info("Thread DisplayAgent arrêté.")
-
-    def stop(self):
-        self._running = False
-        self.work_queue.put(None)
-        self.join()
+    def _display_results_and_publish(self, event: FinalResultsReady):
+        """Méthode qui affiche les résultats et publie l'événement de fin."""
+        self._display_results(event)
+        self.service_bus.publish("DisplayCompleted", DisplayCompleted())
 
     @staticmethod
     def _display_results(event: FinalResultsReady):

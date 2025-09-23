@@ -1,11 +1,10 @@
-import queue
-import threading
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
 import ccxt
 import pandas as pd
 import requests
+from pubsub import QueueWorkerThread, ServiceBus
 from pycoingecko import CoinGeckoAPI
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -19,14 +18,13 @@ from events import (
     TopCoinsFetched,
 )
 from logger import logger
-from service_bus import ServiceBus
 
 
-class DataFetcher(threading.Thread):
+class DataFetcher(QueueWorkerThread):
     """Récupère les données de marché avec une gestion robuste des erreurs et des limites d'API."""
 
     def __init__(self, service_bus: Optional[ServiceBus] = None):
-        super().__init__()
+        super().__init__(service_bus=service_bus, name="DataFetcher")
         self.cg = CoinGeckoAPI()
 
         # Active le rate limiter de CCXT pour respecter les limites de l'API Binance
@@ -38,40 +36,13 @@ class DataFetcher(threading.Thread):
         )
 
         self.session_guid: Optional[str] = None
-        self.service_bus = service_bus
-        self.work_queue = queue.Queue()
-        self._running = True
 
-        if self.service_bus:
-            self._setup_event_subscriptions()
-
-    def _setup_event_subscriptions(self):
+    def setup_event_subscriptions(self) -> None:
         self.service_bus.subscribe("AnalysisConfigurationProvided", self._handle_configuration_provided)
         self.service_bus.subscribe("FetchTopCoinsRequested", self._handle_fetch_top_coins_requested)
         self.service_bus.subscribe("FetchHistoricalPricesRequested", self._handle_fetch_historical_prices_requested)
         self.service_bus.subscribe("FetchPrecisionDataRequested", self._handle_fetch_precision_data_requested)
 
-    def run(self):
-        logger.info("Thread DataFetcher démarré.")
-        while self._running:
-            try:
-                task = self.work_queue.get(timeout=1)
-                if task is None:
-                    break
-                method_name, args = task
-                method = getattr(self, method_name)
-                method(*args)
-                self.work_queue.task_done()
-            except queue.Empty:
-                continue
-            except Exception as e:
-                logger.error(f"Erreur d'exécution de la tâche dans DataFetcher: {e}", exc_info=True)
-        logger.info("Thread DataFetcher arrêté.")
-
-    def stop(self):
-        self._running = False
-        self.work_queue.put(None)
-        self.join()
 
     def _fetch_top_coins_task(self, n: int) -> None:
         """Récupère les N top coins en réessayant chaque page individuellement en cas d'erreur réseau."""
@@ -211,10 +182,10 @@ class DataFetcher(threading.Thread):
         logger.info(f"DataFetcher a reçu la configuration pour la session {self.session_guid}.")
 
     def _handle_fetch_top_coins_requested(self, event: FetchTopCoinsRequested):
-        self.work_queue.put(("_fetch_top_coins_task", (event.n,)))
+        self.add_task("_fetch_top_coins_task", event.n)
 
     def _handle_fetch_historical_prices_requested(self, event: FetchHistoricalPricesRequested):
-        self.work_queue.put(("_fetch_historical_prices_task", (event.coin_id_symbol, event.weeks, event.timeframe)))
+        self.add_task("_fetch_historical_prices_task", event.coin_id_symbol, event.weeks, event.timeframe)
 
     def _handle_fetch_precision_data_requested(self, _event: FetchPrecisionDataRequested):
-        self.work_queue.put(("_fetch_precision_data_task", ()))
+        self.add_task("_fetch_precision_data_task")

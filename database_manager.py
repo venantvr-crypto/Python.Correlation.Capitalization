@@ -1,11 +1,10 @@
-import queue
 import sqlite3
-import threading
 from datetime import datetime, timezone
 from io import StringIO
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
+from pubsub import QueueWorkerThread, ServiceBus
 
 from events import (
     AnalysisConfigurationProvided,
@@ -16,26 +15,19 @@ from events import (
     SingleCoinFetched,
 )
 from logger import logger
-from service_bus import ServiceBus
 
 
-class DatabaseManager(threading.Thread):
+class DatabaseManager(QueueWorkerThread):
     """Gère les interactions avec la base de données SQLite dans son propre thread."""
 
     def __init__(self, db_name: str = "crypto_data.db", service_bus: Optional[ServiceBus] = None):
-        super().__init__()
+        super().__init__(service_bus=service_bus, name="DatabaseManager")
         self.db_name = db_name
         self.conn = None
         self.cursor = None
-        self.service_bus = service_bus
         self.session_guid: Optional[str] = None
-        self.work_queue = queue.Queue()
-        self._running = True
 
-        if self.service_bus:
-            self._setup_event_subscriptions()
-
-    def _setup_event_subscriptions(self):
+    def setup_event_subscriptions(self) -> None:
         self.service_bus.subscribe("AnalysisConfigurationProvided", self._handle_configuration_provided)
         self.service_bus.subscribe("SingleCoinFetched", self._handle_single_coin_fetched)
         self.service_bus.subscribe("HistoricalPricesFetched", self._handle_historical_prices_fetched)
@@ -49,7 +41,7 @@ class DatabaseManager(threading.Thread):
 
     def _handle_single_coin_fetched(self, event: SingleCoinFetched):
         if event.coin:
-            self.work_queue.put(("_db_save_token", (event.coin, self.session_guid), {}, None))
+            self.add_task("_db_save_token", event.coin, self.session_guid)
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
         # 1. Vérifier que la chaîne JSON existe et n'est pas vide.
@@ -70,14 +62,7 @@ class DatabaseManager(threading.Thread):
 
         # 4. Mettre la tâche en file d'attente avec le DataFrame reconstruit.
         if prices_df is not None and not prices_df.empty:
-            self.work_queue.put(
-                (
-                    "_db_save_prices",
-                    (event.coin_id_symbol, prices_df, self.session_guid, event.timeframe),
-                    {},
-                    None,
-                )
-            )
+            self.add_task("_db_save_prices", event.coin_id_symbol, prices_df, self.session_guid, event.timeframe)
 
     def _handle_rsi_calculated(self, event: RSICalculated):
         # 1. Vérifier que la chaîne JSON existe
@@ -95,9 +80,7 @@ class DatabaseManager(threading.Thread):
 
         # 4. Mettre la tâche en file d'attente avec la Series reconstruite
         if rsi_series is not None and not rsi_series.empty:
-            self.work_queue.put(
-                ("_db_save_rsi", (event.coin_id_symbol, rsi_series, self.session_guid, event.timeframe), {}, None)
-            )
+            self.add_task("_db_save_rsi", event.coin_id_symbol, rsi_series, self.session_guid, event.timeframe)
 
     def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):
         result = event.result
@@ -111,39 +94,21 @@ class DatabaseManager(threading.Thread):
                 self.session_guid,
                 event.timeframe,
             )
-            self.work_queue.put(("_db_save_correlation", task_args, {}, None))
+            self.add_task("_db_save_correlation", *task_args)
 
     def _handle_precision_data_fetched(self, event: PrecisionDataFetched):
         if event.precision_data:
-            self.work_queue.put(("_db_save_precision_data", (event.precision_data, self.session_guid), {}, None))
+            self.add_task("_db_save_precision_data", event.precision_data, self.session_guid)
 
     def run(self):
         self.conn = sqlite3.connect(self.db_name, check_same_thread=False)
         self.cursor = self.conn.cursor()
         self._initialize_tables()
-        logger.info("Thread DatabaseManager démarré.")
-        while self._running:
-            try:
-                task = self.work_queue.get(timeout=1)
-                if task is None:
-                    break
-                method_name, args, kwargs, _ = task
-                try:
-                    method = getattr(self, method_name)
-                    method(*args, **kwargs)
-                except Exception as e:
-                    logger.error(f"Erreur d'exécution de la tâche BDD ({method_name}): {e}", exc_info=True)
-                finally:
-                    self.work_queue.task_done()
-            except queue.Empty:
-                continue
-        self._close()
-        logger.info("Thread DatabaseManager arrêté.")
 
-    def stop(self):
-        self._running = False
-        self.work_queue.put(None)
-        self.join()
+        # Appeler la méthode run() de la classe parente pour gérer la boucle de travail
+        super().run()
+
+        self._close()
 
     def _initialize_tables(self) -> None:
         # Cette méthode reste inchangée
@@ -204,9 +169,6 @@ class DatabaseManager(threading.Thread):
             logger.error(f"Erreur lors de l'initialisation des tables: {e}", exc_info=True)
             raise
 
-    # ==============================================================================
-    # MODIFICATION PRINCIPALE CI-DESSOUS
-    # ==============================================================================
     def _db_save_precision_data(self, precision_data: List[Dict], session_guid: str) -> None:
         """Tâche interne optimisée pour enregistrer les données de précision en masse."""
         try:

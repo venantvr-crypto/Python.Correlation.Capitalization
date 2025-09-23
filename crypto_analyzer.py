@@ -1,9 +1,9 @@
 import threading
-import time
 from io import StringIO
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
+from pubsub import OrchestratorBase, ServiceBus, AllProcessingCompleted
 
 from analysis_job import AnalysisJob
 from configuration import AnalysisConfig
@@ -26,23 +26,22 @@ from events import (
 )
 from logger import logger
 from rsi_calculator import RSICalculator
-from service_bus import ServiceBus
 
 
-class CryptoAnalyzer:
+class CryptoAnalyzer(OrchestratorBase):
     """Orchestre les analyses de corrélations RSI pour plusieurs timeframes."""
 
     def __init__(self, config: AnalysisConfig, session_guid: str):
         self.config = config
         self.session_guid = session_guid
 
-        self.service_bus = ServiceBus(url=self.config.pubsub_url, consumer_name=f"crypto-analyzer-{self.session_guid}")
-        self.db_manager = DatabaseManager(service_bus=self.service_bus)
-        self.data_fetcher = DataFetcher(service_bus=self.service_bus)
-        self.rsi_calculator = RSICalculator(service_bus=self.service_bus)
-        self.display_agent = DisplayAgent(service_bus=self.service_bus)
+        service_bus = ServiceBus(url=self.config.pubsub_url, consumer_name=f"crypto-analyzer-{self.session_guid}")
+        super().__init__(service_bus)
 
-        self._setup_event_subscriptions()
+        self.db_manager = None
+        self.data_fetcher = None
+        self.rsi_calculator = None
+        self.display_agent = None
 
         # Initialiser à None pour un état de départ clair.
         self.coins: Optional[List[Dict]] = None
@@ -56,10 +55,18 @@ class CryptoAnalyzer:
 
         self._job_completion_counter = len(self.config.timeframes)
         self._job_lock = threading.Lock()
-        self._all_processing_completed = threading.Event()
         self._initial_data_loaded = threading.Event()
 
-    def _setup_event_subscriptions(self):
+    def register_services(self) -> None:
+        """Crée et enregistre les services gérés par l'orchestrateur."""
+        self.db_manager = DatabaseManager(service_bus=self.service_bus)
+        self.data_fetcher = DataFetcher(service_bus=self.service_bus)
+        self.rsi_calculator = RSICalculator(service_bus=self.service_bus)
+        self.display_agent = DisplayAgent(service_bus=self.service_bus)
+
+        self.services = [self.db_manager, self.data_fetcher, self.rsi_calculator, self.display_agent]
+
+    def setup_event_subscriptions(self) -> None:
         """Abonne les méthodes de l'orchestrateur aux événements du bus de services."""
         self.service_bus.subscribe("RunAnalysisRequested", self._handle_run_analysis_requested)
         self.service_bus.subscribe("TopCoinsFetched", self._handle_top_coins_fetched)
@@ -71,19 +78,11 @@ class CryptoAnalyzer:
         self.service_bus.subscribe("AnalysisJobCompleted", self._handle_analysis_job_completed)
         self.service_bus.subscribe("DisplayCompleted", self._handle_display_completed)
 
-    def run(self) -> None:
-        """Point d'entrée principal pour lancer et gérer le flux d'analyse."""
-        services = [self.db_manager, self.data_fetcher, self.rsi_calculator, self.display_agent, self.service_bus]
-        for service in services:
-            service.start()
-        time.sleep(1)
+    def start_workflow(self) -> None:
+        """Démarre le workflow d'analyse."""
         config_payload = AnalysisConfigurationProvided(session_guid=self.session_guid, config=self.config)
         self.service_bus.publish("AnalysisConfigurationProvided", config_payload)
         self.service_bus.publish("RunAnalysisRequested", RunAnalysisRequested())
-        self._all_processing_completed.wait()
-        for service in reversed(services):
-            service.stop()
-        logger.info("Tous les services ont été arrêtés proprement.")
 
     def _handle_run_analysis_requested(self, _event: RunAnalysisRequested):
         logger.info("Analyse démarrée. Demande des données initiales (top coins et précision).")
@@ -111,7 +110,7 @@ class CryptoAnalyzer:
         # Gérer le cas où les données reçues sont vides.
         if not self.coins or not self.precision_data:
             logger.warning("Aucune crypto ou paire de marché n'a été trouvée. L'analyse ne peut pas continuer.")
-            self._all_processing_completed.set()
+            self._processing_completed.set()
             return
 
         self._initial_data_loaded.set()
@@ -247,4 +246,4 @@ class CryptoAnalyzer:
 
     def _handle_display_completed(self, _event: DisplayCompleted):
         logger.info("Affichage terminé. Déclenchement de l'arrêt du programme.")
-        self._all_processing_completed.set()
+        self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted())

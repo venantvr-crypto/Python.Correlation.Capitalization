@@ -1,31 +1,23 @@
-import queue
-import threading
 from io import StringIO
 from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from pubsub import QueueWorkerThread, ServiceBus
 
 from events import AnalysisConfigurationProvided, CalculateRSIRequested, RSICalculated
 from logger import logger
-from service_bus import ServiceBus
 
 
-class RSICalculator(threading.Thread):
+class RSICalculator(QueueWorkerThread):
     """Calcule le RSI pour une série de prix dans son propre thread."""
 
     def __init__(self, service_bus: Optional[ServiceBus] = None):
-        super().__init__()
+        super().__init__(service_bus=service_bus, name="RSICalculator")
         self.periods: Optional[int] = None
-        self.service_bus = service_bus
         self.session_guid: Optional[str] = None
-        self.work_queue = queue.Queue()
-        self._running = True
 
-        if self.service_bus:
-            self._setup_event_subscriptions()
-
-    def _setup_event_subscriptions(self):
+    def setup_event_subscriptions(self) -> None:
         self.service_bus.subscribe("AnalysisConfigurationProvided", self._handle_configuration_provided)
         self.service_bus.subscribe("CalculateRSIRequested", self._handle_calculate_rsi_requested)
 
@@ -45,29 +37,8 @@ class RSICalculator(threading.Thread):
                 logger.error(f"Impossible de reconstruire la Series de prix pour {event.coin_id_symbol}: {e}")
 
         # On passe la Series reconstruite (ou None) à la tâche de calcul.
-        self.work_queue.put(("_calculate_rsi_task", (event.coin_id_symbol, prices_series, event.timeframe)))
+        self.add_task("_calculate_rsi_task", event.coin_id_symbol, prices_series, event.timeframe)
 
-    def run(self):
-        logger.info("Thread RSICalculator démarré.")
-        while self._running:
-            try:
-                task = self.work_queue.get(timeout=1)
-                if task is None:
-                    continue
-                method_name, args = task
-                method = getattr(self, method_name)
-                method(*args)
-                self.work_queue.task_done()
-            except queue.Empty:
-                continue
-            except Exception as e:
-                logger.error(f"Erreur d'exécution de la tâche dans RSICalculator: {e}")
-        logger.info("Thread RSICalculator arrêté.")
-
-    def stop(self):
-        self._running = False
-        self.work_queue.put(None)
-        self.join()
 
     # def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: Optional[pd.Series], timeframe: str) -> None:
     #     try:

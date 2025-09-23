@@ -10,7 +10,7 @@ PIP           := $(VENV_DIR)/bin/pip
 CLIENT_SCRIPT := main.py
 
 # --- Cibles Principales ---
-.PHONY: help all run run-server run-client stop-server
+.PHONY: help all run run-server run-client stop-server force-update
 
 # Tâche par défaut
 help:
@@ -24,6 +24,8 @@ help:
 	@echo ""
 	@echo "--- Gestion de l'Environnement ---"
 	@echo "  \033[0;33msetup\033[0m         : (Re)Crée l'environnement virtuel et installe toutes les dépendances."
+	@echo "  \033[0;33mforce-update\033[0m  : Force la mise à jour des dépendances du client."
+
 	@echo ""
 	@echo "--- Qualité du Code & Tests ---"
 	@echo "  \033[0;34mtest\033[0m          : Lance les tests unitaires avec pytest."
@@ -75,10 +77,17 @@ test:
 clean:
 	@echo "-> Nettoyage des fichiers temporaires..."
 	@find . -type f -name '*.pyc' -delete
-	@find . -type d -name '__pycache__' -exec rm -rf {} +
-	@find . -type d -name '.pytest_cache' -exec rm -rf {} +
-	@find . -type d -name 'htmlcov' -exec rm -rf {} +
+	@find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+	@find . -type d -name '.pytest_cache' -exec rm -rf {} + 2>/dev/null || true
+	@find . -type d -name 'htmlcov' -exec rm -rf {} + 2>/dev/null || true
 	@rm -f crypto_data.db
 	@echo "-> ✅ Nettoyage terminé."
+
+# Force la mise à jour des dépendances en utilisant le pip du venv
+force-update:
+	@echo "-> Nettoyage du cache pip..."
+	@$(PIP) cache purge
+	@echo "-> Mise à jour des dépendances client depuis requirements.txt..."
+	@$(PIP) install --no-cache-dir -r requirements.txt
 
 all: clean setup test
