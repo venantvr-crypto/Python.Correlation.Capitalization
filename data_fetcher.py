@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple
 import ccxt
 import pandas as pd
 import requests
+# noinspection PyPackageRequirements
 from pubsub import QueueWorkerThread, ServiceBus
 from pycoingecko import CoinGeckoAPI
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential

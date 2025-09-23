@@ -3,6 +3,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
+# noinspection PyPackageRequirements
 from pubsub import QueueWorkerThread, ServiceBus
 
 from events import AnalysisConfigurationProvided, CalculateRSIRequested, RSICalculated

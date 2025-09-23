@@ -4,6 +4,7 @@ from io import StringIO
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
+# noinspection PyPackageRequirements
 from pubsub import QueueWorkerThread, ServiceBus
 
 from events import (

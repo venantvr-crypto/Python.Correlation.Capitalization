@@ -1,5 +1,6 @@
 from typing import Optional
 
+# noinspection PyPackageRequirements
 from pubsub import QueueWorkerThread, ServiceBus
 
 from events import AnalysisConfigurationProvided, DisplayCompleted, FinalResultsReady
