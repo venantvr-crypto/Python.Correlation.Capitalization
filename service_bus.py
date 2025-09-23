@@ -67,39 +67,43 @@ class ServiceBus(threading.Thread):
 
         self.client = PubSubClient(url=self.url, consumer=self.consumer_name, topics=list(self._topics))
 
+        # On parcourt chaque type d'événement UNE SEULE FOIS.
         for event_name, subscribers in self._handlers.items():
-            for subscriber in subscribers:
-                # MODIFICATION : Correction du bug de "late binding".
-                # On passe event_name et subscriber comme arguments à la fonction qui crée le handler.
-                # Cela garantit que chaque handler est lié au bon événement.
-                def create_handler(e_name, sub):
-                    def _internal_handler(message: Dict[str, Any]):
-                        # Le serveur envoie des messages de confirmation que nous devons ignorer
-                        if isinstance(message, str) and message.startswith("Subscribed to"):
+
+            # On crée un "gestionnaire maître" pour cet événement.
+            # Il connaît la liste de TOUS les abonnés pour cet événement.
+            def create_master_handler(e_name, subs_list):
+                def _master_handler(message: Dict[str, Any]):
+                    # Le serveur envoie des messages de confirmation que nous devons ignorer
+                    if isinstance(message, str) and message.startswith("Subscribed to"):
+                        return
+
+                    event_class = EVENT_SCHEMAS.get(e_name)
+                    validated_payload = message
+                    if event_class:
+                        try:
+                            if not isinstance(message, dict):
+                                logger.warning(
+                                    f"Message inattendu pour {e_name}, attendu dict, reçu {type(message)}"
+                                )
+                                return
+                            validated_payload = event_class(**message)
+                        except TypeError as e:
+                            logger.error(f"Erreur validation pour '{e_name}': {e}. Message: {message}")
                             return
 
-                        event_class = EVENT_SCHEMAS.get(e_name)
-                        validated_payload = message
-                        if event_class:
-                            try:
-                                # Si le message est le payload de la dataclass
-                                if not isinstance(message, dict):
-                                    logger.warning(
-                                        f"Message inattendu pour {e_name}, attendu dict, reçu {type(message)}"
-                                    )
-                                    return
-                                validated_payload = event_class(**message)
-                            except TypeError as e:
-                                logger.error(f"Erreur validation pour '{e_name}': {e}. Message: {message}")
-                                return
+                    # On appelle CHAQUE abonné de la liste avec le payload validé.
+                    for sub in subs_list:
                         try:
                             sub(validated_payload)
                         except Exception as e:
                             logger.error(f"Erreur dans l'abonné '{sub.__name__}' pour '{e_name}': {e}", exc_info=True)
 
-                    return _internal_handler
+                return _master_handler
 
-                self.client.register_handler(event_name, create_handler(event_name, subscriber))
+            # On enregistre ce gestionnaire maître UNE SEULE FOIS pour le topic.
+            master_handler = create_master_handler(event_name, subscribers)
+            self.client.register_handler(event_name, master_handler)
 
         logger.info("Tous les handlers sont enregistrés. Démarrage de l'écoute...")
         try:

@@ -2,6 +2,7 @@ import queue
 import sqlite3
 import threading
 from datetime import datetime, timezone
+from io import StringIO
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -51,20 +52,53 @@ class DatabaseManager(threading.Thread):
             self.work_queue.put(("_db_save_token", (event.coin, self.session_guid), {}, None))
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
-        if event.prices_df is not None:
+        # 1. Vérifier que la chaîne JSON existe et n'est pas vide.
+        if not event.prices_df_json:
+            return
+
+        prices_df = None
+        try:
+            # 2. Reconstruire le DataFrame à partir du JSON.
+            prices_df = pd.read_json(StringIO(event.prices_df_json), orient="split")
+            # 3. Reconstituer l'index temporel, qui a été sérialisé en millisecondes.
+            prices_df.index = pd.to_datetime(prices_df.index, unit="ms", utc=True)
+
+        except Exception as e:
+            logger.error(
+                f"Impossible de reconstruire le DataFrame des prix pour {event.coin_id_symbol}: {e}"
+            )
+            return
+
+        # 4. Mettre la tâche en file d'attente avec le DataFrame reconstruit.
+        if prices_df is not None and not prices_df.empty:
             self.work_queue.put(
                 (
                     "_db_save_prices",
-                    (event.coin_id_symbol, event.prices_df, self.session_guid, event.timeframe),
+                    (event.coin_id_symbol, prices_df, self.session_guid, event.timeframe),
                     {},
                     None,
                 )
             )
 
     def _handle_rsi_calculated(self, event: RSICalculated):
-        if event.rsi is not None:
+        # 1. Vérifier que la chaîne JSON existe
+        if not event.rsi_series_json:
+            return
+
+        rsi_series = None
+        try:
+            # 2. Reconstruire la Series à partir du JSON
+            rsi_series = pd.read_json(StringIO(event.rsi_series_json), orient="split", typ="series")
+            # 3. Reconstituer l'index temporel
+            rsi_series.index = pd.to_datetime(rsi_series.index, unit="ms", utc=True)
+        except Exception as e:
+            logger.error(f"Impossible de reconstruire la Series RSI pour la BDD pour {event.coin_id_symbol}: {e}")
+            return
+
+        # 4. Mettre la tâche en file d'attente avec la Series reconstruite
+        if rsi_series is not None and not rsi_series.empty:
             self.work_queue.put(
-                ("_db_save_rsi", (event.coin_id_symbol, event.rsi, self.session_guid, event.timeframe), {}, None)
+                ("_db_save_rsi", (event.coin_id_symbol, rsi_series, self.session_guid, event.timeframe), {}, None)
             )
 
     def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):
@@ -212,34 +246,140 @@ class DatabaseManager(threading.Thread):
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement des données de précision: {e}", exc_info=True)
 
+    # --- Tâches de base de données exécutées par le thread ---
     def _db_save_token(self, coin: Dict, session_guid: Optional[str]) -> None:
-        # Cette méthode reste inchangée
-        pass
+        """Tâche interne pour enregistrer les informations d'un token."""
+        coin_id = coin.get('id')
+        coin_symbol = coin.get('symbol', '').upper()
+        try:
+            if not coin_id:
+                logger.error("Clé 'id' manquante dans le payload du token.")
+                return
+
+            def safe_int(value):
+                if value is None:
+                    return None
+                try:
+                    return int(float(value)) if isinstance(value, (float, str)) else value
+                except (ValueError, TypeError):
+                    return None
+
+            def safe_float(value):
+                if value is None:
+                    return None
+                try:
+                    return float(value) if isinstance(value, (int, str)) else value
+                except (ValueError, TypeError):
+                    return None
+
+            def safe_str(value):
+                return str(value) if value is not None else None
+
+            values = (
+                coin_id, coin_symbol, session_guid, safe_str(coin.get('symbol')), safe_str(coin.get('name')),
+                safe_str(coin.get('image')), safe_float(coin.get('current_price')),
+                safe_int(coin.get('market_cap')), safe_int(coin.get('market_cap_rank')),
+                safe_int(coin.get('fully_diluted_valuation')), safe_int(coin.get('total_volume')),
+                safe_float(coin.get('high_24h')), safe_float(coin.get('low_24h')),
+                safe_float(coin.get('price_change_24h')), safe_float(coin.get('price_change_percentage_24h')),
+                safe_int(coin.get('market_cap_change_24h')), safe_float(coin.get('market_cap_change_percentage_24h')),
+                safe_float(coin.get('circulating_supply')), safe_float(coin.get('total_supply')),
+                safe_float(coin.get('max_supply')), safe_float(coin.get('ath')),
+                safe_float(coin.get('ath_change_percentage')), safe_str(coin.get('ath_date')),
+                safe_float(coin.get('atl')), safe_float(coin.get('atl_change_percentage')),
+                safe_str(coin.get('atl_date')), safe_str(coin.get('roi')), safe_str(coin.get('last_updated'))
+            )
+            self.cursor.execute('''
+                INSERT OR REPLACE INTO tokens (
+                    coin_id, coin_symbol, session_guid, symbol, name, image, current_price, market_cap, market_cap_rank,
+                    fully_diluted_valuation, total_volume, high_24h, low_24h, price_change_24h,
+                    price_change_percentage_24h, market_cap_change_24h, market_cap_change_percentage_24h,
+                    circulating_supply, total_supply, max_supply, ath, ath_change_percentage,
+                    ath_date, atl, atl_change_percentage, atl_date, roi, last_updated
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', values)
+            self.conn.commit()
+            logger.info(f"Token {coin_id} enregistré avec session_guid={session_guid}.")
+        except Exception as e:
+            logger.error(f"Erreur lors de l'enregistrement du token {coin_id}: {e}")
 
     def _db_save_prices(
             self, coin_id_symbol: Tuple[str, str], prices_df: pd.DataFrame, session_guid: Optional[str], timeframe: str
     ) -> None:
-        # Cette méthode reste inchangée
-        pass
+        """Tâche interne optimisée pour enregistrer les prix OHLC en masse."""
+        coin_id, coin_symbol = coin_id_symbol
+        try:
+            if prices_df.empty:
+                logger.warning(f"DataFrame de prix vide pour {coin_id}, aucune donnée enregistrée.")
+                return
 
-    def _db_save_rsi(
-            self, coin_id_symbol: Tuple[str, str], rsi_series: pd.Series, session_guid: Optional[str], timeframe: str
-    ) -> None:
-        # Cette méthode reste inchangée
-        pass
+            # 1. Préparer les données pour l'insertion en masse.
+            data_to_insert = [
+                (
+                    coin_id,
+                    coin_symbol,
+                    ts.isoformat(),
+                    session_guid,
+                    row.open,
+                    row.high,
+                    row.low,
+                    row.close,
+                    row.volume,
+                    timeframe,
+                )
+                for ts, row in prices_df.iterrows()  # On itère sur l'index (ts) et la ligne (row)
+            ]
 
-    def _db_save_correlation(
-            self,
-            coin_id_symbol: Tuple[str, str],
-            run_timestamp: str,
-            correlation: float,
-            market_cap: float,
-            low_cap_quartile: bool,
-            session_guid: Optional[str],
-            timeframe: str,
-    ) -> None:
-        # Cette méthode reste inchangée
-        pass
+            if not data_to_insert:
+                return
+
+            # 2. Exécuter la requête d'insertion en masse.
+            sql = """
+                INSERT OR IGNORE INTO prices
+                (coin_id, coin_symbol, timestamp, session_guid, open, high, low, close, volume, timeframe)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            self.cursor.executemany(sql, data_to_insert)
+            self.conn.commit()
+            logger.info(f"{len(data_to_insert)} prix pour {coin_id} enregistrés (session={session_guid}).")
+
+        except Exception as e:
+            logger.error(f"Erreur lors de l'enregistrement en masse des prix pour {coin_id}: {e}", exc_info=True)
+
+    def _db_save_rsi(self, coin_id_symbol: Tuple[str, str], rsi_series: pd.Series, session_guid: Optional[str], timeframe: str) -> None:
+        """Tâche interne pour enregistrer les valeurs RSI."""
+        coin_id, coin_symbol = coin_id_symbol
+        try:
+            if rsi_series.empty:
+                logger.warning(f"Série RSI vide pour {coin_id}, aucune donnée enregistrée.")
+                return
+            for timestamp, rsi_value in rsi_series.items():
+                if not pd.isna(rsi_value):
+                    # noinspection PyUnresolvedReferences
+                    dt = timestamp.to_pydatetime().isoformat()
+                    self.cursor.execute('''
+                        INSERT INTO rsi (coin_id, coin_symbol, timestamp, session_guid, rsi, timeframe)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (coin_id, coin_symbol, dt, session_guid, rsi_value, timeframe))
+            self.conn.commit()
+            logger.info(f"RSI pour {coin_id} enregistré avec session_guid={session_guid}.")
+        except Exception as e:
+            logger.error(f"Erreur lors de l'enregistrement du RSI pour {coin_id}: {e}")
+
+    def _db_save_correlation(self, coin_id_symbol: Tuple[str, str], run_timestamp: str, correlation: float,
+                             market_cap: float, low_cap_quartile: bool, session_guid: Optional[str], timeframe: str) -> None:
+        """Tâche interne pour enregistrer une corrélation."""
+        coin_id, coin_symbol = coin_id_symbol
+        try:
+            self.cursor.execute('''
+                INSERT INTO correlations (coin_id, coin_symbol, run_timestamp, session_guid, correlation, market_cap, low_cap_quartile, timeframe)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (coin_id, coin_symbol, run_timestamp, session_guid, correlation, market_cap, low_cap_quartile, timeframe))
+            self.conn.commit()
+            logger.info(f"Corrélation pour {coin_id} enregistrée avec session_guid={session_guid}.")
+        except Exception as e:
+            logger.error(f"Erreur lors de l'enregistrement de la corrélation pour {coin_id}: {e}")
 
     def _close(self) -> None:
         try:

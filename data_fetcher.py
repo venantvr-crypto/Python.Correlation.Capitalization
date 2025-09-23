@@ -140,9 +140,7 @@ class DataFetcher(threading.Thread):
             logger.error(f"Échec final de la récupération des prix pour {symbol}: {e}")
 
         if self.service_bus:
-            # MODIFICATION : Sérialiser le DataFrame en chaîne JSON avant de publier.
             prices_json = prices_df.to_json(orient="split") if prices_df is not None else None
-
             event_payload = HistoricalPricesFetched(
                 coin_id_symbol=coin_id_symbol, prices_df_json=prices_json, timeframe=timeframe
             )

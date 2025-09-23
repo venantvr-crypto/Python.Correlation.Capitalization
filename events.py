@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-import pandas as pd
-
 from configuration import AnalysisConfig
 
 
@@ -14,8 +12,6 @@ class AnalysisConfigurationProvided:
 
 @dataclass(frozen=True)
 class RunAnalysisRequested:
-    # MODIFICATION : Ajout d'un champ pour éviter un message vide.
-    # asdict(RunAnalysisRequested()) produira maintenant {'payload': True} au lieu de {}.
     payload: bool = True
 
 
@@ -46,7 +42,6 @@ class HistoricalPricesFetched:
     """Événement indiquant que les prix historiques ont été récupérés."""
 
     coin_id_symbol: Tuple[str, str]
-    # MODIFICATION : Le DataFrame est maintenant transporté comme une chaîne JSON.
     prices_df_json: Optional[str]
     timeframe: str
 
@@ -56,7 +51,6 @@ class CalculateRSIRequested:
     """Événement de requête pour calculer le RSI."""
 
     coin_id_symbol: Tuple[str, str]
-    # MODIFICATION : La Series est maintenant transportée comme une chaîne JSON.
     prices_series_json: Optional[str]
     timeframe: str
 
@@ -64,7 +58,7 @@ class CalculateRSIRequested:
 @dataclass(frozen=True)
 class RSICalculated:
     coin_id_symbol: Tuple[str, str]
-    rsi: Optional[pd.Series]
+    rsi_series_json: Optional[str]
     timeframe: str
 
 

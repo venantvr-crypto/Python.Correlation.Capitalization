@@ -40,7 +40,6 @@ class DisplayAgent(threading.Thread):
                     continue
                 self._display_results(event)
                 self.work_queue.task_done()
-                # MODIFICATION : Publier l'instance de la dataclass
                 self.service_bus.publish("DisplayCompleted", DisplayCompleted())
             except queue.Empty:
                 continue

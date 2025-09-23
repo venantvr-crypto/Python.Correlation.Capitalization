@@ -1,5 +1,6 @@
 import threading
 import time
+from io import StringIO
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -151,7 +152,7 @@ class CryptoAnalyzer:
         prices_df = None
         if event.prices_df_json:
             try:
-                prices_df = pd.read_json(event.prices_df_json, orient="split")
+                prices_df = pd.read_json(StringIO(event.prices_df_json), orient="split")
                 prices_df.index = pd.to_datetime(prices_df.index, unit="ms", utc=True)
             except Exception as e:
                 logger.error(f"Impossible de reconstruire le DataFrame des prix pour {event.coin_id_symbol}: {e}")
@@ -162,7 +163,6 @@ class CryptoAnalyzer:
             )
             return
 
-        # MODIFICATION : Sérialiser la Series 'close' en JSON avant de la publier.
         close_series = prices_df["close"]
         series_json = close_series.to_json(orient="split")
 
@@ -177,17 +177,27 @@ class CryptoAnalyzer:
         if not job:
             return
 
-        if event.rsi is None or event.rsi.empty:
+        rsi_series = None
+        # NOUVEAU : Bloc de désérialisation
+        if event.rsi_series_json:
+            try:
+                rsi_series = pd.read_json(StringIO(event.rsi_series_json), orient="split", typ="series")
+                rsi_series.index = pd.to_datetime(rsi_series.index, unit="ms", utc=True)
+            except Exception as e:
+                logger.error(f"Impossible de reconstruire la Series RSI pour {event.coin_id_symbol}: {e}")
+
+        # La suite de la logique utilise la Series reconstruite
+        if rsi_series is None or rsi_series.empty:
             self.service_bus.publish(
                 "CoinProcessingFailed", {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe}
             )
             return
 
         key = (event.coin_id_symbol[0], event.coin_id_symbol[1], event.timeframe)
-        self.rsi_results[key] = event.rsi
+        self.rsi_results[key] = rsi_series
 
         if event.coin_id_symbol[1].lower() == "btc":
-            job.btc_rsi = event.rsi
+            job.btc_rsi = rsi_series
 
         job.decrement_counter()
 
@@ -214,9 +224,9 @@ class CryptoAnalyzer:
         result = {
             "coin_id": coin_id_symbol[0],
             "coin_symbol": coin_id_symbol[1],
-            "correlation": correlation,
+            "correlation": float(correlation),  # Conversion de np.float64 -> float
             "market_cap": market_cap,
-            "low_cap_quartile": low_cap_quartile,
+            "low_cap_quartile": bool(low_cap_quartile),  # Conversion de np.bool_ -> bool
         }
         self.service_bus.publish("CorrelationAnalyzed", {"result": result, "timeframe": timeframe})
 

@@ -10,7 +10,7 @@ if __name__ == "__main__":
 
     analysis_config = AnalysisConfig(
         weeks=50,
-        top_n_coins=500,
+        top_n_coins=20,
         correlation_threshold=0.7,
         rsi_period=14,
         timeframes=["1h", "1d"],
