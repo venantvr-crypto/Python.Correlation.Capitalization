@@ -56,7 +56,6 @@ class DatabaseManager(threading.Thread):
         if not event.prices_df_json:
             return
 
-        prices_df = None
         try:
             # 2. Reconstruire le DataFrame à partir du JSON.
             prices_df = pd.read_json(StringIO(event.prices_df_json), orient="split")
@@ -85,7 +84,6 @@ class DatabaseManager(threading.Thread):
         if not event.rsi_series_json:
             return
 
-        rsi_series = None
         try:
             # 2. Reconstruire la Series à partir du JSON
             rsi_series = pd.read_json(StringIO(event.rsi_series_json), orient="split", typ="series")

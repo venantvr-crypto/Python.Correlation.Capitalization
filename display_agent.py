@@ -52,7 +52,8 @@ class DisplayAgent(threading.Thread):
         self.work_queue.put(None)
         self.join()
 
-    def _display_results(self, event: FinalResultsReady):
+    @staticmethod
+    def _display_results(event: FinalResultsReady):
         results = sorted(event.results, key=lambda x: (-abs(x.get("correlation", 0)), x.get("market_cap", 0)))
         timeframes_str = ", ".join(event.timeframes)
 
