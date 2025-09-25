@@ -44,7 +44,6 @@ class DataFetcher(QueueWorkerThread):
         self.service_bus.subscribe("FetchHistoricalPricesRequested", self._handle_fetch_historical_prices_requested)
         self.service_bus.subscribe("FetchPrecisionDataRequested", self._handle_fetch_precision_data_requested)
 
-
     def _fetch_top_coins_task(self, n: int) -> None:
         """Récupère les N top coins en réessayant chaque page individuellement en cas d'erreur réseau."""
         coins = []
