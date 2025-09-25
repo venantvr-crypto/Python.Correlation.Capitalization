@@ -28,7 +28,7 @@ class DisplayAgent(QueueWorkerThread):
     def _display_results_and_publish(self, event: FinalResultsReady):
         """Méthode qui affiche les résultats et publie l'événement de fin."""
         self._display_results(event)
-        self.service_bus.publish("DisplayCompleted", DisplayCompleted())
+        self.service_bus.publish("DisplayCompleted", DisplayCompleted(), self.__class__.__name__)
 
     @staticmethod
     def _display_results(event: FinalResultsReady):

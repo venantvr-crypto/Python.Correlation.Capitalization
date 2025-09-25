@@ -36,7 +36,7 @@ class AnalysisJob:
         """Lance l'analyse de corrélation pour toutes les pièces traitées de ce job."""
         if self.btc_rsi is None:
             logger.error(f"Impossible de lancer l'analyse pour {self.timeframe}: RSI de BTC manquant.")
-            self.analyzer.service_bus.publish("AnalysisJobCompleted", {"timeframe": self.timeframe})
+            self.analyzer.service_bus.publish("AnalysisJobCompleted", {"timeframe": self.timeframe}, self.__class__.__name__)
             return
 
         for coin_id, symbol in self.coins_to_process:
@@ -47,4 +47,4 @@ class AnalysisJob:
                     coin_id_symbol=(coin_id, symbol), coin_rsi=coin_rsi, btc_rsi=self.btc_rsi, timeframe=self.timeframe
                 )
 
-        self.analyzer.service_bus.publish("AnalysisJobCompleted", {"timeframe": self.timeframe})
+        self.analyzer.service_bus.publish("AnalysisJobCompleted", {"timeframe": self.timeframe}, self.__class__.__name__)

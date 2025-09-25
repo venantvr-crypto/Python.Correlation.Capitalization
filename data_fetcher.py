@@ -77,7 +77,7 @@ class DataFetcher(QueueWorkerThread):
 
         logger.info(f"Récupération depuis CoinGecko terminée. {len(coins)} coins trouvés.")
         if self.service_bus:
-            self.service_bus.publish("TopCoinsFetched", TopCoinsFetched(coins=coins[:n]))
+            self.service_bus.publish("TopCoinsFetched", TopCoinsFetched(coins=coins[:n]), self.__class__.__name__)
 
     @retry(
         stop=stop_after_attempt(3),
@@ -116,7 +116,7 @@ class DataFetcher(QueueWorkerThread):
             event_payload = HistoricalPricesFetched(
                 coin_id_symbol=coin_id_symbol, prices_df_json=prices_json, timeframe=timeframe
             )
-            self.service_bus.publish("HistoricalPricesFetched", event_payload)
+            self.service_bus.publish("HistoricalPricesFetched", event_payload, self.__class__.__name__)
 
     @retry(
         stop=stop_after_attempt(3),
@@ -176,7 +176,7 @@ class DataFetcher(QueueWorkerThread):
             logger.error(f"Échec de la récupération des données de précision de Binance: {e}")
 
         if self.service_bus:
-            self.service_bus.publish("PrecisionDataFetched", PrecisionDataFetched(precision_data=precision_data))
+            self.service_bus.publish("PrecisionDataFetched", PrecisionDataFetched(precision_data=precision_data), self.__class__.__name__)
 
     def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
         self.session_guid = event.session_guid

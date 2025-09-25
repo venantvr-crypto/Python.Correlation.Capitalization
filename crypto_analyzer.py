@@ -36,7 +36,7 @@ class CryptoAnalyzer(OrchestratorBase):
         self.config = config
         self.session_guid = session_guid
 
-        service_bus = ServiceBus(url=self.config.pubsub_url, consumer_name=f"crypto-analyzer-{self.session_guid}")
+        service_bus = ServiceBus(url=self.config.pubsub_url, consumer_name=self.__class__.__name__)
         super().__init__(service_bus)
 
         self.db_manager = None
@@ -82,13 +82,13 @@ class CryptoAnalyzer(OrchestratorBase):
     def start_workflow(self) -> None:
         """Démarre le workflow d'analyse."""
         config_payload = AnalysisConfigurationProvided(session_guid=self.session_guid, config=self.config)
-        self.service_bus.publish("AnalysisConfigurationProvided", config_payload)
-        self.service_bus.publish("RunAnalysisRequested", RunAnalysisRequested())
+        self.service_bus.publish("AnalysisConfigurationProvided", config_payload, self.__class__.__name__)
+        self.service_bus.publish("RunAnalysisRequested", RunAnalysisRequested(), self.__class__.__name__)
 
     def _handle_run_analysis_requested(self, _event: RunAnalysisRequested):
         logger.info("Analyse démarrée. Demande des données initiales (top coins et précision).")
-        self.service_bus.publish("FetchPrecisionDataRequested", FetchPrecisionDataRequested())
-        self.service_bus.publish("FetchTopCoinsRequested", {"n": self.config.top_n_coins})
+        self.service_bus.publish("FetchPrecisionDataRequested", FetchPrecisionDataRequested(), self.__class__.__name__)
+        self.service_bus.publish("FetchTopCoinsRequested", {"n": self.config.top_n_coins}, self.__class__.__name__)
 
     def _handle_precision_data_fetched(self, event: PrecisionDataFetched):
         self.precision_data = {item["symbol"]: item for item in event.precision_data}
@@ -123,7 +123,7 @@ class CryptoAnalyzer(OrchestratorBase):
         logger.info(f"Filtrage des cryptos : {original_coin_count} -> {len(self.coins)} avec une paire USDC.")
 
         for coin in self.coins:
-            self.service_bus.publish("SingleCoinFetched", {"coin": coin})
+            self.service_bus.publish("SingleCoinFetched", {"coin": coin}, self.__class__.__name__)
 
         self.market_caps = {c["symbol"].lower(): c.get("market_cap", 0) for c in self.coins}
         market_cap_values = [mc for mc in self.market_caps.values() if mc > 0]
@@ -141,11 +141,14 @@ class CryptoAnalyzer(OrchestratorBase):
             self.service_bus.publish(
                 "FetchHistoricalPricesRequested",
                 {"coin_id_symbol": ("bitcoin", "btc"), "weeks": self.config.weeks, "timeframe": timeframe},
+                self.__class__.__name__
             )
+
             for coin_id, symbol in job.coins_to_process:
                 self.service_bus.publish(
                     "FetchHistoricalPricesRequested",
                     {"coin_id_symbol": (coin_id, symbol), "weeks": self.config.weeks, "timeframe": timeframe},
+                    self.__class__.__name__
                 )
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
@@ -159,7 +162,9 @@ class CryptoAnalyzer(OrchestratorBase):
 
         if prices_df is None or prices_df.empty:
             self.service_bus.publish(
-                "CoinProcessingFailed", {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe}
+                "CoinProcessingFailed",
+                {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe},
+                self.__class__.__name__
             )
             return
 
@@ -170,7 +175,7 @@ class CryptoAnalyzer(OrchestratorBase):
         rsi_request_event = CalculateRSIRequested(
             coin_id_symbol=event.coin_id_symbol, prices_series_json=series_json, timeframe=event.timeframe
         )
-        self.service_bus.publish("CalculateRSIRequested", rsi_request_event)
+        self.service_bus.publish("CalculateRSIRequested", rsi_request_event, self.__class__.__name__)
 
     def _handle_rsi_calculated(self, event: RSICalculated):
         job = self.analysis_jobs.get(event.timeframe)
@@ -189,7 +194,9 @@ class CryptoAnalyzer(OrchestratorBase):
         # La suite de la logique utilise la Series reconstruite
         if rsi_series is None or rsi_series.empty:
             self.service_bus.publish(
-                "CoinProcessingFailed", {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe}
+                "CoinProcessingFailed",
+                {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe},
+                self.__class__.__name__
             )
             return
 
@@ -228,7 +235,7 @@ class CryptoAnalyzer(OrchestratorBase):
             "market_cap": market_cap,
             "low_cap_quartile": bool(low_cap_quartile),  # Conversion de np.bool_ -> bool
         }
-        self.service_bus.publish("CorrelationAnalyzed", {"result": result, "timeframe": timeframe})
+        self.service_bus.publish("CorrelationAnalyzed", {"result": result, "timeframe": timeframe}, self.__class__.__name__)
 
     def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):
         if event.result:
@@ -243,8 +250,9 @@ class CryptoAnalyzer(OrchestratorBase):
                 self.service_bus.publish(
                     "FinalResultsReady",
                     {"results": self.results, "weeks": self.config.weeks, "timeframes": self.config.timeframes},
+                    self.__class__.__name__
                 )
 
     def _handle_display_completed(self, _event: DisplayCompleted):
         logger.info("Affichage terminé. Déclenchement de l'arrêt du programme.")
-        self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted())
+        self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)

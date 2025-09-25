@@ -40,33 +40,6 @@ class RSICalculator(QueueWorkerThread):
         # On passe la Series reconstruite (ou None) à la tâche de calcul.
         self.add_task("_calculate_rsi_task", event.coin_id_symbol, prices_series, event.timeframe)
 
-
-    # def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: Optional[pd.Series], timeframe: str) -> None:
-    #     try:
-    #         if self.periods is None:
-    #             raise ValueError("La période RSI n'a pas été configurée.")
-    #         if data is None or data.empty or len(data) < self.periods + 1:
-    #             raise ValueError("Données insuffisantes pour calculer le RSI")
-    #
-    #         delta = data.astype(float).diff()
-    #         gain = (delta.where(delta > 0, 0)).rolling(window=self.periods).mean()
-    #         loss = (-delta.where(delta < 0, 0)).rolling(window=self.periods).mean()
-    #         loss = loss.replace(0, np.nan)
-    #         rs = gain / loss
-    #         rsi = 100 - (100 / (1 + rs))
-    #         rsi = rsi.dropna()
-    #
-    #         if self.service_bus:
-    #             self.service_bus.publish(
-    #                 "RSICalculated", {"coin_id_symbol": coin_id_symbol, "rsi": rsi, "timeframe": timeframe}
-    #             )
-    #     except Exception as e:
-    #         logger.error(f"Erreur lors du calcul du RSI pour {coin_id_symbol}: {e}")
-    #         if self.service_bus:
-    #             self.service_bus.publish(
-    #                 "RSICalculated", {"coin_id_symbol": coin_id_symbol, "rsi": None, "timeframe": timeframe}
-    #             )
-
     def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: Optional[pd.Series], timeframe: str) -> None:
         rsi_series = None
         try:
@@ -94,4 +67,4 @@ class RSICalculator(QueueWorkerThread):
                 rsi_series_json=rsi_json,
                 timeframe=timeframe
             )
-            self.service_bus.publish("RSICalculated", event)
+            self.service_bus.publish("RSICalculated", event, self.__class__.__name__)

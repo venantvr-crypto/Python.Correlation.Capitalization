@@ -10,7 +10,7 @@ PIP           := $(VENV_DIR)/bin/pip
 CLIENT_SCRIPT := main.py
 
 # --- Cibles Principales ---
-.PHONY: help all run run-server run-client stop-server force-update
+.PHONY: help all run run-server run-client stop-server force-update force-rebuild
 
 # Tâche par défaut
 help:
@@ -89,5 +89,13 @@ force-update:
 	@$(PIP) cache purge
 	@echo "-> Mise à jour des dépendances client depuis requirements.txt..."
 	@$(PIP) install --no-cache-dir -r requirements.txt
+
+# NOUVELLE CIBLE : Pour forcer la reconstruction sans utiliser le cache
+force-rebuild: stop-server
+	@echo "-> Lancement d'une reconstruction complète SANS CACHE..."
+	@docker compose build --no-cache
+	@echo "-> Lancement du serveur en arrière-plan..."
+	@docker compose up -d
+	@echo "-> Serveur lancé. Vous pouvez maintenant utiliser 'make run-client'."
 
 all: clean setup test
