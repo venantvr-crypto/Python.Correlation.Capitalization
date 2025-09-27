@@ -309,24 +309,36 @@ class DatabaseManager(QueueWorkerThread):
             logger.error(f"Erreur lors de l'enregistrement en masse des prix pour {coin_id}: {e}", exc_info=True)
 
     def _db_save_rsi(self, coin_id_symbol: Tuple[str, str], rsi_series: pd.Series, session_guid: Optional[str], timeframe: str) -> None:
-        """Tâche interne pour enregistrer les valeurs RSI."""
         coin_id, coin_symbol = coin_id_symbol
         try:
             if rsi_series.empty:
-                logger.warning(f"Série RSI vide pour {coin_id}, aucune donnée enregistrée.")
                 return
-            for timestamp, rsi_value in rsi_series.items():
-                if not pd.isna(rsi_value):
-                    # noinspection PyUnresolvedReferences
-                    dt = timestamp.to_pydatetime().isoformat()
-                    self.cursor.execute('''
-                        INSERT INTO rsi (coin_id, coin_symbol, timestamp, session_guid, rsi, timeframe)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (coin_id, coin_symbol, dt, session_guid, rsi_value, timeframe))
+
+            # noinspection PyUnresolvedReferences
+            data_to_insert = [
+                (
+                    coin_id,
+                    coin_symbol,
+                    ts.to_pydatetime().isoformat(),
+                    session_guid,
+                    rsi_value,
+                    timeframe,
+                )
+                for ts, rsi_value in rsi_series.items() if not pd.isna(rsi_value)
+            ]
+
+            if not data_to_insert:
+                return
+
+            sql = """
+                INSERT OR IGNORE INTO rsi (coin_id, coin_symbol, timestamp, session_guid, rsi, timeframe)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """
+            self.cursor.executemany(sql, data_to_insert)
             self.conn.commit()
-            logger.info(f"RSI pour {coin_id} enregistré avec session_guid={session_guid}.")
+            logger.info(f"{len(data_to_insert)} RSI pour {coin_id} enregistrés (session={session_guid}).")
         except Exception as e:
-            logger.error(f"Erreur lors de l'enregistrement du RSI pour {coin_id}: {e}")
+            logger.error(f"Erreur lors de l'enregistrement en masse du RSI pour {coin_id}: {e}", exc_info=True)
 
     def _db_save_correlation(self, coin_id_symbol: Tuple[str, str], run_timestamp: str, correlation: float,
                              market_cap: float, low_cap_quartile: bool, session_guid: Optional[str], timeframe: str) -> None:

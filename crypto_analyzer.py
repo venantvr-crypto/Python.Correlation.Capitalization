@@ -104,54 +104,61 @@ class CryptoAnalyzer(OrchestratorBase):
         Vérifie si les deux flux de données initiaux ont été REÇUS (même s'ils sont vides),
         puis lance l'analyse ou s'arrête proprement.
         """
-        # Vérifier que les variables ne sont plus None.
-        if not (self.coins is not None and self.precision_data is not None and not self._initial_data_loaded.is_set()):
-            logger.debug("En attente de toutes les données initiales...")
-            return
+        try:
+            # Vérifier que les variables ne sont plus None.
+            if not (self.coins is not None and self.precision_data is not None and not self._initial_data_loaded.is_set()):
+                logger.debug("En attente de toutes les données initiales...")
+                return
 
-        # Gérer le cas où les données reçues sont vides.
-        if not self.coins or not self.precision_data:
-            logger.warning("Aucune crypto ou paire de marché n'a été trouvée. L'analyse ne peut pas continuer.")
-            self._processing_completed.set()
-            return
+            # Gérer le cas où les données reçues sont vides.
+            if not self.coins or not self.precision_data:
+                logger.warning("Aucune crypto ou paire de marché n'a été trouvée. L'analyse ne peut pas continuer.")
+                self._processing_completed.set()
+                return
 
-        self._initial_data_loaded.set()
-        logger.info("Données initiales (coins et précision) reçues. Démarrage du traitement.")
+            self._initial_data_loaded.set()
+            logger.info("Données initiales (coins et précision) reçues. Démarrage du traitement.")
 
-        usdc_base_symbols = {m["base_asset"] for m in self.precision_data.values() if m["quote_asset"] == "USDC"}
-        original_coin_count = len(self.coins)
-        self.coins = [c for c in self.coins if c.get("symbol", "").upper() in usdc_base_symbols]
-        logger.info(f"Filtrage des cryptos : {original_coin_count} -> {len(self.coins)} avec une paire USDC.")
+            usdc_base_symbols = {m["base_asset"] for m in self.precision_data.values() if m["quote_asset"] == "USDC"}
+            original_coin_count = len(self.coins)
+            self.coins = [c for c in self.coins if c.get("symbol", "").upper() in usdc_base_symbols]
+            logger.info(f"Filtrage des cryptos : {original_coin_count} -> {len(self.coins)} avec une paire USDC.")
 
-        for coin in self.coins:
-            self.service_bus.publish("SingleCoinFetched", {"coin": coin}, self.__class__.__name__)
+            for coin in self.coins:
+                self.service_bus.publish("SingleCoinFetched", {"coin": coin}, self.__class__.__name__)
 
-        self.market_caps = {c["symbol"].lower(): c.get("market_cap", 0) for c in self.coins}
-        market_cap_values = [mc for mc in self.market_caps.values() if mc > 0]
-        if market_cap_values:
-            self.low_cap_threshold = pd.Series(market_cap_values).quantile(self.config.low_cap_percentile / 100)
-        logger.info(
-            f"Seuil de faible capitalisation ({self.config.low_cap_percentile}e percentile) : ${self.low_cap_threshold:,.2f}"
-        )
-
-        coins_to_process = [(c["id"], c["symbol"]) for c in self.coins]
-        for timeframe, job in self.analysis_jobs.items():
-            job.set_coins_to_process(coins_to_process)
-            logger.info(f"Lancement du job pour {timeframe} avec {len(job.coins_to_process) + 1} paires.")
-
-            self.service_bus.publish(
-                "FetchHistoricalPricesRequested",
-                {"coin_id_symbol": ("bitcoin", "btc"), "weeks": self.config.weeks, "timeframe": timeframe},
-                self.__class__.__name__
+            self.market_caps = {c["symbol"].lower(): c.get("market_cap", 0) for c in self.coins}
+            market_cap_values = [mc for mc in self.market_caps.values() if mc > 0]
+            if market_cap_values:
+                self.low_cap_threshold = pd.Series(market_cap_values).quantile(self.config.low_cap_percentile / 100)
+            logger.info(
+                f"Seuil de faible capitalisation ({self.config.low_cap_percentile}e percentile) : ${self.low_cap_threshold:,.2f}"
             )
 
-            for coin_id, symbol in job.coins_to_process:
-                sqlite_business_logger.log(self.__class__.__name__, f"FetchHistoricalPricesRequested pour {coin_id}")
+            coins_to_process = [(c["id"], c["symbol"]) for c in self.coins]
+            for timeframe, job in self.analysis_jobs.items():
+                job.set_coins_to_process(coins_to_process)
+                logger.info(f"Lancement du job pour {timeframe} avec {len(job.coins_to_process) + 1} paires.")
+
                 self.service_bus.publish(
                     "FetchHistoricalPricesRequested",
-                    {"coin_id_symbol": (coin_id, symbol), "weeks": self.config.weeks, "timeframe": timeframe},
+                    {"coin_id_symbol": ("bitcoin", "btc"), "weeks": self.config.weeks, "timeframe": timeframe},
                     self.__class__.__name__
                 )
+
+                for coin_id, symbol in job.coins_to_process:
+                    sqlite_business_logger.log(self.__class__.__name__, f"FetchHistoricalPricesRequested pour {coin_id}")
+                    self.service_bus.publish(
+                        "FetchHistoricalPricesRequested",
+                        {"coin_id_symbol": (coin_id, symbol), "weeks": self.config.weeks, "timeframe": timeframe},
+                        self.__class__.__name__
+                    )
+        except Exception as e:
+            logger.error(
+                f"Erreur critique lors de l'initialisation de l'analyse : {e}. Arrêt de l'application.", exc_info=True
+            )
+            # Publier l'événement de fin pour éviter le blocage
+            self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
         prices_df = None
@@ -171,6 +178,7 @@ class CryptoAnalyzer(OrchestratorBase):
             return
 
         close_series = prices_df["close"]
+        # noinspection PyUnresolvedReferences
         series_json = close_series.to_json(orient="split")
 
         # On publie la dataclass correspondante avec la chaîne JSON.
