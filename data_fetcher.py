@@ -8,6 +8,7 @@ import requests
 from pubsub import QueueWorkerThread, ServiceBus
 from pycoingecko import CoinGeckoAPI
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from threadsafe_logger import sqlite_business_logger
 
 from events import (
     AnalysisConfigurationProvided,
@@ -115,6 +116,7 @@ class DataFetcher(QueueWorkerThread):
             event_payload = HistoricalPricesFetched(
                 coin_id_symbol=coin_id_symbol, prices_df_json=prices_json, timeframe=timeframe
             )
+            sqlite_business_logger.log(self.__class__.__name__, f"HistoricalPricesFetched pour {coin_id_symbol}")
             self.service_bus.publish("HistoricalPricesFetched", event_payload, self.__class__.__name__)
 
     @retry(
@@ -175,6 +177,8 @@ class DataFetcher(QueueWorkerThread):
             logger.error(f"Échec de la récupération des données de précision de Binance: {e}")
 
         if self.service_bus:
+            length = len(precision_data)
+            sqlite_business_logger.log(self.__class__.__name__, f"PrecisionDataFetched pour {length} paires")
             self.service_bus.publish("PrecisionDataFetched", PrecisionDataFetched(precision_data=precision_data), self.__class__.__name__)
 
     def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):

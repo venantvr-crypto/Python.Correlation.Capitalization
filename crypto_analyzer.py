@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 # noinspection PyPackageRequirements
-from pubsub import OrchestratorBase, ServiceBus, AllProcessingCompleted
+from pubsub import OrchestratorBase, ServiceBus, AllProcessingCompleted, WorkerFailed
 from threadsafe_logger import sqlite_business_logger
 
 from analysis_job import AnalysisJob
@@ -37,7 +37,8 @@ class CryptoAnalyzer(OrchestratorBase):
         self.config = config
         self.session_guid = session_guid
 
-        service_bus = ServiceBus(url=self.config.pubsub_url, consumer_name=self.__class__.__name__)
+        url = self.config.pubsub_url
+        service_bus = ServiceBus(url=url, consumer_name=self.__class__.__name__)
         super().__init__(service_bus)
 
         self.db_manager = None
@@ -79,6 +80,7 @@ class CryptoAnalyzer(OrchestratorBase):
         self.service_bus.subscribe("CoinProcessingFailed", self._handle_coin_processing_failed)
         self.service_bus.subscribe("AnalysisJobCompleted", self._handle_analysis_job_completed)
         self.service_bus.subscribe("DisplayCompleted", self._handle_display_completed)
+        self.service_bus.subscribe("WorkerFailed", self._handle_worker_failed)
 
     def start_workflow(self) -> None:
         """Démarre le workflow d'analyse."""
@@ -264,6 +266,14 @@ class CryptoAnalyzer(OrchestratorBase):
                     {"results": self.results, "weeks": self.config.weeks, "timeframes": self.config.timeframes},
                     self.__class__.__name__
                 )
+
+    def _handle_worker_failed(self, event: WorkerFailed):
+        logger.critical(
+            f"Le worker '{event.worker_name}' a signalé une défaillance critique: {event.reason}. "
+            "Déclenchement de l'arrêt général de l'application."
+        )
+        # Publie l'événement de fin pour débloquer la boucle principale et tout arrêter proprement
+        self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
 
     def _handle_display_completed(self, _event: DisplayCompleted):
         logger.info("Affichage terminé. Déclenchement de l'arrêt du programme.")

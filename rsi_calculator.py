@@ -25,8 +25,8 @@ class RSICalculator(QueueWorkerThread):
 
     def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
         self.session_guid = event.session_guid
-        config: dict = event.config
-        self.periods = config.get('rsi_period', 14)
+        config = event.config
+        self.periods = config.rsi_period
         logger.info(f"RSICalculator a reçu la configuration pour la session {self.session_guid}.")
 
     def _handle_calculate_rsi_requested(self, event: CalculateRSIRequested):
