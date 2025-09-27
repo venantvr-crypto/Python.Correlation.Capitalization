@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 # noinspection PyPackageRequirements
 from pubsub import QueueWorkerThread, ServiceBus
+from threadsafe_logger import sqlite_business_logger
 
 from events import AnalysisConfigurationProvided, CalculateRSIRequested, RSICalculated
 from logger import logger
@@ -67,4 +68,5 @@ class RSICalculator(QueueWorkerThread):
                 rsi_series_json=rsi_json,
                 timeframe=timeframe
             )
+            sqlite_business_logger.log(self.__class__.__name__, f"RSICalculated pour {coin_id_symbol}")
             self.service_bus.publish("RSICalculated", event, self.__class__.__name__)

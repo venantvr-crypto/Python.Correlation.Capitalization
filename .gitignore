@@ -1,5 +1,8 @@
 .venv
 .idea
 .claude
+.env
 
 *.db
+/event-storming/
+/prompts/

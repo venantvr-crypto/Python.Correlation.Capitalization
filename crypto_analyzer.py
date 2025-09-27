@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 # noinspection PyPackageRequirements
 from pubsub import OrchestratorBase, ServiceBus, AllProcessingCompleted
+from threadsafe_logger import sqlite_business_logger
 
 from analysis_job import AnalysisJob
 from configuration import AnalysisConfig
@@ -145,6 +146,7 @@ class CryptoAnalyzer(OrchestratorBase):
             )
 
             for coin_id, symbol in job.coins_to_process:
+                sqlite_business_logger.log(self.__class__.__name__, f"FetchHistoricalPricesRequested pour {coin_id}")
                 self.service_bus.publish(
                     "FetchHistoricalPricesRequested",
                     {"coin_id_symbol": (coin_id, symbol), "weeks": self.config.weeks, "timeframe": timeframe},
@@ -175,6 +177,7 @@ class CryptoAnalyzer(OrchestratorBase):
         rsi_request_event = CalculateRSIRequested(
             coin_id_symbol=event.coin_id_symbol, prices_series_json=series_json, timeframe=event.timeframe
         )
+        sqlite_business_logger.log(self.__class__.__name__, f"CalculateRSIRequested pour {event.coin_id_symbol}")
         self.service_bus.publish("CalculateRSIRequested", rsi_request_event, self.__class__.__name__)
 
     def _handle_rsi_calculated(self, event: RSICalculated):
@@ -235,6 +238,7 @@ class CryptoAnalyzer(OrchestratorBase):
             "market_cap": market_cap,
             "low_cap_quartile": bool(low_cap_quartile),  # Conversion de np.bool_ -> bool
         }
+        sqlite_business_logger.log(self.__class__.__name__, f"CorrelationAnalyzed avec {result}")
         self.service_bus.publish("CorrelationAnalyzed", {"result": result, "timeframe": timeframe}, self.__class__.__name__)
 
     def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):

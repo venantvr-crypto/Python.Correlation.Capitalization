@@ -2,6 +2,7 @@ import threading
 from typing import List, Optional, Tuple
 
 import pandas as pd
+from threadsafe_logger import sqlite_business_logger
 
 from logger import logger
 
@@ -47,4 +48,5 @@ class AnalysisJob:
                     coin_id_symbol=(coin_id, symbol), coin_rsi=coin_rsi, btc_rsi=self.btc_rsi, timeframe=self.timeframe
                 )
 
+        sqlite_business_logger.log(self.__class__.__name__, f"AnalysisJobCompleted pour {self.timeframe}")
         self.analyzer.service_bus.publish("AnalysisJobCompleted", {"timeframe": self.timeframe}, self.__class__.__name__)
