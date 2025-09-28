@@ -104,10 +104,10 @@ class DataFetcher(QueueWorkerThread):
                 ohlcv = self.binance.fetch_ohlcv(symbol, timeframe, since=since, limit=1000)
                 if ohlcv:
                     prices_df = pd.DataFrame(
-                        ohlcv,
-                        columns=["timestamp", "open", "high", "low", "close", "volume"],
-                        index=[datetime.fromtimestamp(x[0] / 1000, tz=timezone.utc) for x in ohlcv],
+                        ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"]
                     )
+                    prices_df["timestamp"] = pd.to_datetime(prices_df["timestamp"], unit="ms", utc=True)
+                    prices_df.set_index("timestamp", inplace=True)
         except Exception as e:
             logger.error(f"Échec final de la récupération des prix pour {symbol}: {e}")
 

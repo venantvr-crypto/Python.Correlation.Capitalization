@@ -1,43 +1,79 @@
 import os
 import sqlite3
-import sys
 import tempfile
-import unittest
-from unittest.mock import Mock
+from unittest.mock import MagicMock
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# noinspection PyPackageRequirements
+import pytest
 
 from database_manager import DatabaseManager
-from events import AnalysisConfigurationProvided
+from events import AnalysisConfigurationProvided, SingleCoinFetched
 
 
-class TestDatabaseManager(unittest.TestCase):
+# On utilise la fixture partagée de conftest.py pour la configuration
+@pytest.fixture
+def db_manager(analysis_config):
+    """
+    Fixture pytest pour initialiser le DatabaseManager avec une BDD temporaire.
+    Le `yield` gère le nettoyage (teardown) après le test.
+    """
+    # Création d'un fichier de BDD temporaire
+    temp_db_file = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    db_path = temp_db_file.name
+    temp_db_file.close()
 
-    def setUp(self):
-        self.temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self.db_path = self.temp_db.name
-        self.temp_db.close()
+    # Initialisation du manager
+    mock_bus = MagicMock()
+    manager = DatabaseManager(db_name=db_path, service_bus=mock_bus)
+    manager.start()
 
-        self.mock_service_bus = Mock()
-        self.db_manager = DatabaseManager(db_name=self.db_path, service_bus=self.mock_service_bus)
-        self.db_manager.start()
+    # On attend 1 seconde maximum. Si ça échoue, le test s'arrête avec une erreur claire.
+    # noinspection PyProtectedMember
+    initialized_in_time = manager._initialized_event.wait(timeout=1)
+    assert initialized_in_time, "Le DatabaseManager n'a pas pu s'initialiser dans le temps imparti."
 
-        config_event = AnalysisConfigurationProvided(session_guid="test-guid", config=Mock())
-        self.db_manager._handle_configuration_provided(config_event)
+    config_event = AnalysisConfigurationProvided(session_guid="test-guid", config=analysis_config)
+    # noinspection PyProtectedMember
+    manager._handle_configuration_provided(config_event)
 
-    def tearDown(self):
-        if self.db_manager.is_alive():
-            self.db_manager.stop()
-        try:
-            os.unlink(self.db_path)
-        except Exception:  # Correction de l'exception trop large
-            pass
+    yield manager  # Le test s'exécute ici
 
-    def test_tables_creation(self):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        self.assertIn("tokens", tables)
-        self.assertIn("prices", tables)
+    # --- Nettoyage après le test ---
+    manager.stop()
+    os.unlink(db_path)
+
+
+def test_tables_are_created(db_manager):
+    """
+    Vérifie que le DatabaseManager crée bien les tables nécessaires au démarrage.
+    """
+    # La fixture a déjà attendu que l'initialisation soit terminée,
+    # on peut donc vérifier immédiatement.
+
+    # Connexion directe à la BDD pour vérifier l'état
+    conn = sqlite3.connect(db_manager.db_name)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    tables = {row[0] for row in cursor.fetchall()}
+    conn.close()
+
+    expected_tables = {"tokens", "prices", "rsi", "correlations", "precision_data"}
+    assert expected_tables.issubset(tables)
+
+
+def test_handle_single_coin_fetched_adds_task(db_manager, mocker):
+    """
+    Vérifie que l'événement SingleCoinFetched ajoute bien une tâche à la file d'attente.
+    """
+    # On espionne la méthode add_task
+    mocker.patch.object(db_manager, 'add_task')
+
+    coin_data = {"id": "bitcoin", "symbol": "btc"}
+    event = SingleCoinFetched(coin=coin_data)
+
+    # On appelle le handler
+    db_manager._handle_single_coin_fetched(event)
+
+    # On vérifie que la tâche d'enregistrement a bien été ajoutée
+    # noinspection PyUnresolvedReferences
+    db_manager.add_task.assert_called_once_with("_db_save_token", coin_data, "test-guid")

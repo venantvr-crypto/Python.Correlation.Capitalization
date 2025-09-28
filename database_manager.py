@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from io import StringIO
 from typing import Dict, List, Optional, Tuple
@@ -27,6 +28,7 @@ class DatabaseManager(QueueWorkerThread):
         self.conn = None
         self.cursor = None
         self.session_guid: Optional[str] = None
+        self._initialized_event = threading.Event()  # -- NOUVEAU: Événement de synchronisation
 
     def setup_event_subscriptions(self) -> None:
         self.service_bus.subscribe("AnalysisConfigurationProvided", self._handle_configuration_provided)
@@ -45,41 +47,28 @@ class DatabaseManager(QueueWorkerThread):
             self.add_task("_db_save_token", event.coin, self.session_guid)
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
-        # 1. Vérifier que la chaîne JSON existe et n'est pas vide.
         if not event.prices_df_json:
             return
-
         try:
-            # 2. Reconstruire le DataFrame à partir du JSON.
             prices_df = pd.read_json(StringIO(event.prices_df_json), orient="split")
-            # 3. Reconstituer l'index temporel, qui a été sérialisé en millisecondes.
             prices_df.index = pd.to_datetime(prices_df.index, unit="ms", utc=True)
-
         except Exception as e:
             logger.error(
                 f"Impossible de reconstruire le DataFrame des prix pour {event.coin_id_symbol}: {e}"
             )
             return
-
-        # 4. Mettre la tâche en file d'attente avec le DataFrame reconstruit.
         if prices_df is not None and not prices_df.empty:
             self.add_task("_db_save_prices", event.coin_id_symbol, prices_df, self.session_guid, event.timeframe)
 
     def _handle_rsi_calculated(self, event: RSICalculated):
-        # 1. Vérifier que la chaîne JSON existe
         if not event.rsi_series_json:
             return
-
         try:
-            # 2. Reconstruire la Series à partir du JSON
             rsi_series = pd.read_json(StringIO(event.rsi_series_json), orient="split", typ="series")
-            # 3. Reconstituer l'index temporel
             rsi_series.index = pd.to_datetime(rsi_series.index, unit="ms", utc=True)
         except Exception as e:
             logger.error(f"Impossible de reconstruire la Series RSI pour la BDD pour {event.coin_id_symbol}: {e}")
             return
-
-        # 4. Mettre la tâche en file d'attente avec la Series reconstruite
         if rsi_series is not None and not rsi_series.empty:
             self.add_task("_db_save_rsi", event.coin_id_symbol, rsi_series, self.session_guid, event.timeframe)
 
@@ -105,6 +94,7 @@ class DatabaseManager(QueueWorkerThread):
         self.conn = sqlite3.connect(self.db_name, check_same_thread=False)
         self.cursor = self.conn.cursor()
         self._initialize_tables()
+        self._initialized_event.set()
 
         # Appeler la méthode run() de la classe parente pour gérer la boucle de travail
         super().run()
@@ -112,7 +102,6 @@ class DatabaseManager(QueueWorkerThread):
         self._close()
 
     def _initialize_tables(self) -> None:
-        # Cette méthode reste inchangée
         try:
             self.cursor.execute(
                 """
@@ -126,7 +115,7 @@ class DatabaseManager(QueueWorkerThread):
                     atl_change_percentage REAL, atl_date TEXT, roi TEXT, last_updated TEXT,
                     PRIMARY KEY (coin_id, session_guid)
                 )
-            """
+                """
             )
             self.cursor.execute(
                 """
@@ -135,7 +124,7 @@ class DatabaseManager(QueueWorkerThread):
                     open REAL, high REAL, low REAL, close REAL, volume REAL, timeframe TEXT,
                     PRIMARY KEY (coin_id, timestamp, session_guid, timeframe)
                 )
-            """
+                """
             )
             self.cursor.execute(
                 """
@@ -143,7 +132,7 @@ class DatabaseManager(QueueWorkerThread):
                     coin_id TEXT, coin_symbol TEXT, timestamp TIMESTAMP, session_guid TEXT, rsi REAL, timeframe TEXT,
                     PRIMARY KEY (coin_id, timestamp, session_guid, timeframe)
                 )
-            """
+                """
             )
             self.cursor.execute(
                 """
@@ -152,7 +141,7 @@ class DatabaseManager(QueueWorkerThread):
                     correlation REAL, market_cap REAL, low_cap_quartile BOOLEAN, timeframe TEXT,
                     PRIMARY KEY (coin_id, run_timestamp, session_guid, timeframe)
                 )
-            """
+                """
             )
             self.cursor.execute(
                 """
@@ -163,7 +152,7 @@ class DatabaseManager(QueueWorkerThread):
                     session_guid TEXT,
                     PRIMARY KEY (symbol, session_guid)
                 )
-            """
+                """
             )
             self.conn.commit()
         except Exception as e:
@@ -171,12 +160,9 @@ class DatabaseManager(QueueWorkerThread):
             raise
 
     def _db_save_precision_data(self, precision_data: List[Dict], session_guid: str) -> None:
-        """Tâche interne optimisée pour enregistrer les données de précision en masse."""
         try:
-            # 1. Préparer une liste de tuples, où chaque tuple représente une ligne à insérer.
-            data_to_insert = []
-            for data in precision_data:
-                values = (
+            data_to_insert = [
+                (
                     data.get("symbol"),
                     data.get("quote_asset"),
                     data.get("base_asset"),
@@ -188,13 +174,10 @@ class DatabaseManager(QueueWorkerThread):
                     float(data.get("min_notional", "0")),
                     session_guid,
                 )
-                data_to_insert.append(values)
-
+                for data in precision_data
+            ]
             if not data_to_insert:
                 return
-
-            # 2. Utiliser executemany() pour une insertion en masse ultra-rapide.
-            # 'INSERT OR IGNORE' évite les erreurs si une clé primaire existe déjà.
             sql = """
                 INSERT OR IGNORE INTO precision_data (
                     symbol, quote_asset, base_asset, status, base_asset_precision,
@@ -207,11 +190,8 @@ class DatabaseManager(QueueWorkerThread):
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement des données de précision: {e}", exc_info=True)
 
-    # --- Tâches de base de données exécutées par le thread ---
     def _db_save_token(self, coin: Dict, session_guid: Optional[str]) -> None:
-        """Tâche interne pour enregistrer les informations d'un token."""
         coin_id = coin.get('id')
-        coin_symbol = coin.get('symbol', '').upper()
         try:
             if not coin_id:
                 logger.error("Clé 'id' manquante dans le payload du token.")
@@ -237,7 +217,7 @@ class DatabaseManager(QueueWorkerThread):
                 return str(value) if value is not None else None
 
             values = (
-                coin_id, coin_symbol, session_guid, safe_str(coin.get('symbol')), safe_str(coin.get('name')),
+                coin_id, coin.get('symbol', '').upper(), session_guid, safe_str(coin.get('symbol')), safe_str(coin.get('name')),
                 safe_str(coin.get('image')), safe_float(coin.get('current_price')),
                 safe_int(coin.get('market_cap')), safe_int(coin.get('market_cap_rank')),
                 safe_int(coin.get('fully_diluted_valuation')), safe_int(coin.get('total_volume')),
@@ -265,37 +245,17 @@ class DatabaseManager(QueueWorkerThread):
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement du token {coin_id}: {e}")
 
-    def _db_save_prices(
-            self, coin_id_symbol: Tuple[str, str], prices_df: pd.DataFrame, session_guid: Optional[str], timeframe: str
-    ) -> None:
-        """Tâche interne optimisée pour enregistrer les prix OHLC en masse."""
+    def _db_save_prices(self, coin_id_symbol: Tuple[str, str], prices_df: pd.DataFrame, session_guid: Optional[str], timeframe: str) -> None:
         coin_id, coin_symbol = coin_id_symbol
         try:
             if prices_df.empty:
-                logger.warning(f"DataFrame de prix vide pour {coin_id}, aucune donnée enregistrée.")
                 return
-
-            # 1. Préparer les données pour l'insertion en masse.
             data_to_insert = [
-                (
-                    coin_id,
-                    coin_symbol,
-                    ts.isoformat(),
-                    session_guid,
-                    row.open,
-                    row.high,
-                    row.low,
-                    row.close,
-                    row.volume,
-                    timeframe,
-                )
-                for ts, row in prices_df.iterrows()  # On itère sur l'index (ts) et la ligne (row)
+                (coin_id, coin_symbol, ts.isoformat(), session_guid, row.open, row.high, row.low, row.close, row.volume, timeframe)
+                for ts, row in prices_df.iterrows()
             ]
-
             if not data_to_insert:
                 return
-
-            # 2. Exécuter la requête d'insertion en masse.
             sql = """
                 INSERT OR IGNORE INTO prices
                 (coin_id, coin_symbol, timestamp, session_guid, open, high, low, close, volume, timeframe)
@@ -304,7 +264,6 @@ class DatabaseManager(QueueWorkerThread):
             self.cursor.executemany(sql, data_to_insert)
             self.conn.commit()
             logger.info(f"{len(data_to_insert)} prix pour {coin_id} enregistrés (session={session_guid}).")
-
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement en masse des prix pour {coin_id}: {e}", exc_info=True)
 
@@ -313,23 +272,12 @@ class DatabaseManager(QueueWorkerThread):
         try:
             if rsi_series.empty:
                 return
-
-            # noinspection PyUnresolvedReferences
             data_to_insert = [
-                (
-                    coin_id,
-                    coin_symbol,
-                    ts.to_pydatetime().isoformat(),
-                    session_guid,
-                    rsi_value,
-                    timeframe,
-                )
+                (coin_id, coin_symbol, ts.to_pydatetime().isoformat(), session_guid, rsi_value, timeframe)
                 for ts, rsi_value in rsi_series.items() if not pd.isna(rsi_value)
             ]
-
             if not data_to_insert:
                 return
-
             sql = """
                 INSERT OR IGNORE INTO rsi (coin_id, coin_symbol, timestamp, session_guid, rsi, timeframe)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -340,9 +288,8 @@ class DatabaseManager(QueueWorkerThread):
         except Exception as e:
             logger.error(f"Erreur lors de l'enregistrement en masse du RSI pour {coin_id}: {e}", exc_info=True)
 
-    def _db_save_correlation(self, coin_id_symbol: Tuple[str, str], run_timestamp: str, correlation: float,
-                             market_cap: float, low_cap_quartile: bool, session_guid: Optional[str], timeframe: str) -> None:
-        """Tâche interne pour enregistrer une corrélation."""
+    def _db_save_correlation(self, coin_id_symbol: Tuple[str, str], run_timestamp: str, correlation: float, market_cap: float, low_cap_quartile: bool,
+                             session_guid: Optional[str], timeframe: str) -> None:
         coin_id, coin_symbol = coin_id_symbol
         try:
             self.cursor.execute('''

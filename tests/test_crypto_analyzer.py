@@ -1,42 +1,41 @@
-import os
-import sys
-import unittest
-from unittest.mock import MagicMock
+from unittest.mock import patch, ANY
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from configuration import AnalysisConfig
 from crypto_analyzer import CryptoAnalyzer
-from events import TopCoinsFetched
 
 
-class TestCryptoAnalyzer(unittest.TestCase):
+# On utilise les fixtures définies dans conftest.py
+def test_analyzer_initialization(analysis_config):
+    """Teste que l'initialisation de l'analyzer est correcte."""
+    # On mock le ServiceBus pour ne pas dépendre du réseau
+    with patch('crypto_analyzer.ServiceBus') as mock_bus_class:
+        analyzer = CryptoAnalyzer(config=analysis_config, session_guid="test-guid")
 
-    def setUp(self):
-        """Prépare les données de test avant chaque test."""
-        self.config = AnalysisConfig(weeks=4, top_n_coins=100)
-        # Le session_guid est maintenant requis par le constructeur
-        self.analyzer = CryptoAnalyzer(config=self.config, session_guid="test-guid")
+        # Vérifie que le bus est initialisé avec la bonne URL
+        mock_bus_class.assert_called_once_with(url=str(analysis_config.pubsub_url), consumer_name='CryptoAnalyzer')
+        assert len(analyzer.analysis_jobs) == len(analysis_config.timeframes)
+        assert analyzer.session_guid == "test-guid"
 
-        # Remplacement des services par des MagicMock pour isoler les tests
-        self.analyzer.service_bus = MagicMock()
-        self.analyzer.db_manager = MagicMock()
-        self.analyzer.data_fetcher = MagicMock()
-        self.analyzer.rsi_calculator = MagicMock()
-        self.analyzer.display_agent = MagicMock()
 
-    def test_handle_top_coins_fetched(self):
-        """Test de la gestion de la réception des top coins."""
-        coins = [{"id": "bitcoin", "symbol": "btc", "market_cap": 1000}]
-        event = TopCoinsFetched(coins=coins)
-        self.analyzer._handle_top_coins_fetched(event)
-        self.assertEqual(self.analyzer.coins, coins)
+def test_start_analysis_if_ready_starts_processing(analysis_config, mocker):
+    """
+    Teste que l'analyse démarre et publie les bonnes requêtes
+    quand les données initiales sont prêtes.
+    """
+    with patch('crypto_analyzer.ServiceBus'):
+        # Création de l'instance à tester
+        analyzer = CryptoAnalyzer(config=analysis_config, session_guid="test-guid")
 
-    def test_start_analysis_if_ready(self):
-        """Test du démarrage de l'analyse quand toutes les données sont prêtes."""
-        self.analyzer.coins = [{"id": "bitcoin", "symbol": "BTC", "market_cap": 1000}]
-        self.analyzer.precision_data = {"BTC/USDC": {"base_asset": "BTC", "quote_asset": "USDC"}}
+        # On mock le service_bus de l'instance pour vérifier les appels
+        analyzer.service_bus = mocker.MagicMock()
 
-        self.analyzer._start_analysis_if_ready()
+        # On simule la réception des données initiales
+        analyzer.coins = [{"id": "bitcoin", "symbol": "BTC", "market_cap": 1000}]
+        analyzer.precision_data = {"BTC/USDC": {"base_asset": "BTC", "quote_asset": "USDC"}}
 
-        self.analyzer.service_bus.publish.assert_called()
+        # On appelle la méthode à tester
+        analyzer._start_analysis_if_ready()
+
+        # On vérifie que la méthode a bien publié les événements pour lancer le fetching
+        # noinspection PyUnresolvedReferences
+        analyzer.service_bus.publish.assert_any_call("FetchHistoricalPricesRequested", ANY, "CryptoAnalyzer")
+        assert analyzer._initial_data_loaded.is_set()

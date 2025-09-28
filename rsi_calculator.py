@@ -43,23 +43,28 @@ class RSICalculator(QueueWorkerThread):
 
     def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: Optional[pd.Series], timeframe: str) -> None:
         rsi_series = None
-        try:
-            if self.periods is None:
-                raise ValueError("La période RSI n'a pas été configurée.")
-            if data is None or data.empty or len(data) < self.periods + 1:
-                raise ValueError("Données insuffisantes pour calculer le RSI")
 
-            delta = data.astype(float).diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=self.periods).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=self.periods).mean()
-            loss = loss.replace(0, np.nan)
-            rs = gain / loss
-            rsi_series = 100 - (100 / (1 + rs))
-            rsi_series = rsi_series.dropna()
-
-        except Exception as e:
-            logger.error(f"Erreur lors du calcul du RSI pour {coin_id_symbol}: {e}")
-            # rsi_series reste None en cas d'erreur
+        if self.periods is None:
+            logger.error("La période RSI n'a pas été configurée. Arrêt du calcul.")
+        elif data is None or data.empty or len(data.dropna()) < self.periods + 1:
+            logger.warning(
+                f"Sautant le calcul RSI pour {coin_id_symbol} ({timeframe}): "
+                f"données insuffisantes ou invalides."
+            )
+        else:
+            try:
+                valid_data = data.dropna().astype(float)
+                delta = valid_data.diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=self.periods).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=self.periods).mean()
+                rs = gain / loss
+                rs[loss == 0] = np.inf
+                rsi_series = 100 - (100 / (1 + rs))
+                rsi_series[rs == np.inf] = 100
+                rsi_series = rsi_series.dropna()
+            except Exception as e:
+                logger.error(f"Erreur inattendue lors du calcul du RSI pour {coin_id_symbol}: {e}", exc_info=True)
+                rsi_series = None  # S'assurer que le résultat est None en cas d'échec
 
         if self.service_bus:
             rsi_json = rsi_series.to_json(orient="split") if rsi_series is not None and not rsi_series.empty else None

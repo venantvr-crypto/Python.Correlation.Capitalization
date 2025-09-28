@@ -12,13 +12,12 @@ if __name__ == "__main__":
     logger.info(f"Démarrage de la session d'analyse avec le GUID: {session_guid}")
 
     with sqlite_business_logger:
-        # noinspection PyPackageRequirements
         sqlite_business_logger.log("__main__", f"Démarrage de la session d'analyse avec le GUID: {session_guid}")
 
         try:
             analysis_config = AnalysisConfig(
                 weeks=50,
-                top_n_coins=500,
+                top_n_coins=1000,
                 correlation_threshold=0.7,
                 rsi_period=14,
                 timeframes=["1h", "1d"],

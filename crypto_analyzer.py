@@ -39,7 +39,7 @@ class CryptoAnalyzer(OrchestratorBase):
 
         url = self.config.pubsub_url
         service_bus = ServiceBus(url=url, consumer_name=self.__class__.__name__)
-        super().__init__(service_bus)
+        super().__init__(service_bus, enable_status_page=True)
 
         self.db_manager = None
         self.data_fetcher = None
@@ -247,6 +247,7 @@ class CryptoAnalyzer(OrchestratorBase):
             "correlation": float(correlation),  # Conversion de np.float64 -> float
             "market_cap": market_cap,
             "low_cap_quartile": bool(low_cap_quartile),  # Conversion de np.bool_ -> bool
+            "timeframe": timeframe,
         }
         sqlite_business_logger.log(self.__class__.__name__, f"CorrelationAnalyzed avec {result}")
         self.service_bus.publish("CorrelationAnalyzed", {"result": result, "timeframe": timeframe}, self.__class__.__name__)
