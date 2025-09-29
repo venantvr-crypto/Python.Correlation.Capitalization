@@ -12,7 +12,7 @@ from logger import logger
 
 
 class RSICalculator(QueueWorkerThread):
-    """Calcule le RSI pour une série de prix dans son propre thread."""
+    """Calculates RSI for a price series in its own thread."""
 
     def __init__(self, service_bus: Optional[ServiceBus] = None):
         super().__init__(service_bus=service_bus, name="RSICalculator")
@@ -27,7 +27,7 @@ class RSICalculator(QueueWorkerThread):
         self.session_guid = event.session_guid
         config = event.config
         self.periods = config.rsi_period
-        logger.info(f"RSICalculator a reçu la configuration pour la session {self.session_guid}.")
+        logger.info(f"RSICalculator received configuration for session {self.session_guid}.")
 
     def _handle_calculate_rsi_requested(self, event: CalculateRSIRequested):
         prices_series = None
@@ -36,20 +36,20 @@ class RSICalculator(QueueWorkerThread):
                 prices_series = pd.read_json(StringIO(event.prices_series_json), orient="split", typ="series")
                 prices_series.index = pd.to_datetime(prices_series.index, unit="ms", utc=True)
             except Exception as e:
-                logger.error(f"Impossible de reconstruire la Series de prix pour {event.coin_id_symbol}: {e}")
+                logger.error(f"Cannot reconstruct price Series for {event.coin_id_symbol}: {e}")
 
-        # On passe la Series reconstruite (ou None) à la tâche de calcul.
+        # Pass the reconstructed Series (or None) to the calculation task.
         self.add_task("_calculate_rsi_task", event.coin_id_symbol, prices_series, event.timeframe)
 
     def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: Optional[pd.Series], timeframe: str) -> None:
         rsi_series = None
 
         if self.periods is None:
-            logger.error("La période RSI n'a pas été configurée. Arrêt du calcul.")
+            logger.error("RSI period has not been configured. Stopping calculation.")
         elif data is None or data.empty or len(data.dropna()) < self.periods + 1:
             logger.warning(
-                f"Sautant le calcul RSI pour {coin_id_symbol} ({timeframe}): "
-                f"données insuffisantes ou invalides."
+                f"Skipping RSI calculation for {coin_id_symbol} ({timeframe}): "
+                f"insufficient or invalid data."
             )
         else:
             try:
@@ -63,8 +63,8 @@ class RSICalculator(QueueWorkerThread):
                 rsi_series[rs == np.inf] = 100
                 rsi_series = rsi_series.dropna()
             except Exception as e:
-                logger.error(f"Erreur inattendue lors du calcul du RSI pour {coin_id_symbol}: {e}", exc_info=True)
-                rsi_series = None  # S'assurer que le résultat est None en cas d'échec
+                logger.error(f"Unexpected error calculating RSI for {coin_id_symbol}: {e}", exc_info=True)
+                rsi_series = None  # Ensure the result is None in case of failure
 
         if self.service_bus:
             rsi_json = rsi_series.to_json(orient="split") if rsi_series is not None and not rsi_series.empty else None

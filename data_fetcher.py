@@ -23,17 +23,17 @@ from logger import logger
 
 
 class DataFetcher(QueueWorkerThread):
-    """Récupère les données de marché avec une gestion robuste des erreurs et des limites d'API."""
+    """Fetches market data with robust error handling and API rate limiting."""
 
     def __init__(self, service_bus: Optional[ServiceBus] = None):
         super().__init__(service_bus=service_bus, name="DataFetcher")
         self.cg = CoinGeckoAPI()
 
-        # Active le rate limiter de CCXT pour respecter les limites de l'API Binance
+        # Enable CCXT rate limiter to respect Binance API limits
         self.binance = ccxt.binance(
             {
                 "enableRateLimit": True,
-                "timeout": 30000,  # 30 secondes en millisecondes
+                "timeout": 30000,  # 30 seconds in milliseconds
             }
         )
 
@@ -46,36 +46,36 @@ class DataFetcher(QueueWorkerThread):
         self.service_bus.subscribe("FetchPrecisionDataRequested", self._handle_fetch_precision_data_requested)
 
     def _fetch_top_coins_task(self, n: int) -> None:
-        """Récupère les N top coins en réessayant chaque page individuellement en cas d'erreur réseau."""
+        """Fetches the top N coins, retrying each page individually on network errors."""
         coins = []
         pages = (n + 99) // 100
-        logger.info(f"Début de la récupération de {n} coins sur {pages} pages depuis CoinGecko...")
+        logger.info(f"Starting to fetch {n} coins across {pages} pages from CoinGecko...")
 
         @retry(
             stop=stop_after_attempt(4),
             wait=wait_exponential(multiplier=2, min=5, max=30),
             retry=retry_if_exception_type(requests.exceptions.RequestException),
             before_sleep=lambda retry_state: logger.warning(
-                f"Erreur réseau avec CoinGecko. Réessai de la page dans {int(retry_state.next_action.sleep)}s... (Tentative {retry_state.attempt_number})"
+                f"Network error with CoinGecko. Retrying page in {int(retry_state.next_action.sleep)}s... (Attempt {retry_state.attempt_number})"
             ),
         )
         def fetch_one_page(page_num: int) -> List[dict]:
-            logger.info(f"Récupération de la page {page_num}/{pages} de CoinGecko...")
+            logger.info(f"Fetching page {page_num}/{pages} from CoinGecko...")
             return self.cg.get_coins_markets(vs_currency="usd", per_page=100, page=page_num, timeout=30)
 
         for page in range(1, pages + 1):
             try:
                 new_coins = fetch_one_page(page)
                 if not new_coins:
-                    logger.warning(f"La page {page} de CoinGecko n'a retourné aucune donnée, arrêt de la collecte.")
+                    logger.warning(f"Page {page} from CoinGecko returned no data, stopping collection.")
                     break
                 coins.extend(new_coins)
             except requests.exceptions.RequestException as e:
-                logger.error(f"Échec final de la récupération de la page {page} après plusieurs tentatives: {e}")
-                logger.warning("Arrêt de la collecte des top coins en raison d'une erreur réseau persistante.")
+                logger.error(f"Final failure fetching page {page} after multiple attempts: {e}")
+                logger.warning("Stopping top coins collection due to persistent network error.")
                 break
 
-        logger.info(f"Récupération depuis CoinGecko terminée. {len(coins)} coins trouvés.")
+        logger.info(f"CoinGecko fetch completed. {len(coins)} coins found.")
         if self.service_bus:
             self.service_bus.publish("TopCoinsFetched", TopCoinsFetched(coins=coins[:n]), self.__class__.__name__)
 
@@ -84,14 +84,14 @@ class DataFetcher(QueueWorkerThread):
         wait=wait_exponential(multiplier=2, min=5, max=20),
         retry=retry_if_exception_type(ccxt.NetworkError),
         before_sleep=lambda rs: logger.warning(
-            f"Erreur réseau sur Binance pour {rs.args[0][1]}. Réessai dans {int(rs.next_action.sleep)}s..."
+            f"Network error on Binance for {rs.args[0][1]}. Retrying in {int(rs.next_action.sleep)}s..."
         ),
     )
     def _fetch_historical_prices_task(self, coin_id_symbol: Tuple[str, str], weeks: int, timeframe: str) -> None:
         coin_id, coin_symbol = coin_id_symbol
         symbol = f"{coin_symbol.upper()}/USDC"
 
-        logger.info(f"Récupération des prix pour {symbol} sur le timeframe {timeframe}...")
+        logger.info(f"Fetching prices for {symbol} on timeframe {timeframe}...")
 
         prices_df = None
         try:
@@ -109,7 +109,7 @@ class DataFetcher(QueueWorkerThread):
                     prices_df["timestamp"] = pd.to_datetime(prices_df["timestamp"], unit="ms", utc=True)
                     prices_df.set_index("timestamp", inplace=True)
         except Exception as e:
-            logger.error(f"Échec final de la récupération des prix pour {symbol}: {e}")
+            logger.error(f"Final failure fetching prices for {symbol}: {e}")
 
         if self.service_bus:
             prices_json = prices_df.to_json(orient="split") if prices_df is not None else None
@@ -124,13 +124,13 @@ class DataFetcher(QueueWorkerThread):
         wait=wait_exponential(multiplier=2, min=5, max=20),
         retry=retry_if_exception_type(ccxt.NetworkError),
         before_sleep=lambda rs: logger.warning(
-            f"Erreur réseau sur Binance. Réessai dans {int(rs.next_action.sleep)}s..."
+            f"Network error on Binance. Retrying in {int(rs.next_action.sleep)}s..."
         ),
     )
     def _fetch_precision_data_task(self) -> None:
         precision_data = []
         try:
-            logger.info("Récupération des données de précision de tous les marchés Binance...")
+            logger.info("Fetching precision data from all Binance markets...")
             markets = self.binance.load_markets()
             for market_info in markets.values():
                 if market_info.get("active"):
@@ -172,9 +172,9 @@ class DataFetcher(QueueWorkerThread):
                             "min_notional": notional_filter.get("minNotional"),
                         }
                         precision_data.append(data)
-            logger.info(f"{len(precision_data)} marchés actifs trouvés sur Binance.")
+            logger.info(f"{len(precision_data)} active markets found on Binance.")
         except Exception as e:
-            logger.error(f"Échec de la récupération des données de précision de Binance: {e}")
+            logger.error(f"Failed to fetch precision data from Binance: {e}")
 
         if self.service_bus:
             length = len(precision_data)
@@ -183,7 +183,7 @@ class DataFetcher(QueueWorkerThread):
 
     def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
         self.session_guid = event.session_guid
-        logger.info(f"DataFetcher a reçu la configuration pour la session {self.session_guid}.")
+        logger.info(f"DataFetcher received configuration for session {self.session_guid}.")
 
     def _handle_fetch_top_coins_requested(self, event: FetchTopCoinsRequested):
         self.add_task("_fetch_top_coins_task", event.n)

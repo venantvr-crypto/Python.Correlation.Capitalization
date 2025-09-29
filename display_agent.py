@@ -6,24 +6,24 @@ from pubsub import QueueWorkerThread, ServiceBus
 from events import AnalysisConfigurationProvided, DisplayCompleted, FinalResultsReady
 from logger import logger
 
-# --- Définition des codes de couleur ANSI pour le terminal ---
+# --- Definition of ANSI color codes for the terminal ---
 RESET = "\033[0m"
-# Textes sur fonds colorés
+# Text on colored backgrounds
 BLACK_ON_YELLOW = "\033[30;43m"
 WHITE_ON_BLUE = "\033[97;44m"
 BLACK_ON_GREEN = "\033[30;42m"
 WHITE_ON_GREEN = "\033[97;42m"
 WHITE_ON_RED = "\033[97;41m"
-# Texte simple
+# Simple text
 BOLD_WHITE = "\033[1;97m"
 CYAN = "\033[96m"
 
 
-# --- Fin des codes de couleur ---
+# --- End of color codes ---
 
 
 class DisplayAgent(QueueWorkerThread):
-    """Agent responsable de l'affichage final des résultats dans son propre thread."""
+    """Agent responsible for displaying final results in its own thread."""
 
     def __init__(self, service_bus: Optional[ServiceBus] = None):
         super().__init__(service_bus=service_bus, name="DisplayAgent")
@@ -36,14 +36,14 @@ class DisplayAgent(QueueWorkerThread):
     def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
         self.session_guid = event.session_guid
         logger.info(
-            f"{BLACK_ON_YELLOW}DisplayAgent{RESET} a reçu la configuration pour la session {BOLD_WHITE}{self.session_guid}{RESET}."
+            f"{BLACK_ON_YELLOW}DisplayAgent{RESET} received configuration for session {BOLD_WHITE}{self.session_guid}{RESET}."
         )
 
     def _handle_final_results_ready(self, event: FinalResultsReady):
         self.add_task("_display_results_and_publish", event)
 
     def _display_results_and_publish(self, event: FinalResultsReady):
-        """Méthode qui affiche les résultats et publie l'événement de fin."""
+        """Method that displays results and publishes the completion event."""
         self._display_results(event)
         self.service_bus.publish("DisplayCompleted", DisplayCompleted(), self.__class__.__name__)
 
@@ -53,11 +53,11 @@ class DisplayAgent(QueueWorkerThread):
         timeframes_str = ", ".join(event.timeframes)
 
         logger.info(
-            f"\n{WHITE_ON_BLUE}Tokens à faible capitalisation avec forte corrélation RSI avec BTC ({event.weeks} semaines, timeframes: {timeframes_str}) :{RESET}"
+            f"\n{WHITE_ON_BLUE}Low capitalization tokens with strong RSI correlation with BTC ({event.weeks} weeks, timeframes: {timeframes_str}):{RESET}"
         )
 
         if not results:
-            logger.info(f"{WHITE_ON_RED}Aucun résultat à afficher.{RESET}")
+            logger.info(f"{WHITE_ON_RED}No results to display.{RESET}")
             return
 
         for result in results:
@@ -65,6 +65,6 @@ class DisplayAgent(QueueWorkerThread):
             logger.info(
                 f"Coin: {BOLD_WHITE}{result['coin_id']}/{result['coin_symbol']}{RESET}, "
                 f"Timeframe: {result.get('timeframe', 'N/A')}, "
-                f"Corrélation RSI: {correlation_color}{result['correlation']:.3f}{RESET}, "
+                f"RSI Correlation: {correlation_color}{result['correlation']:.3f}{RESET}, "
                 f"Market Cap: {CYAN}${result['market_cap']:,.0f}{RESET}"
             )

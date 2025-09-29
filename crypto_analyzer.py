@@ -31,7 +31,7 @@ from rsi_calculator import RSICalculator
 
 
 class CryptoAnalyzer(OrchestratorBase):
-    """Orchestre les analyses de corrélations RSI pour plusieurs timeframes."""
+    """Orchestrates RSI correlation analyses for multiple timeframes."""
 
     def __init__(self, config: AnalysisConfig, session_guid: str):
         self.config = config
@@ -46,7 +46,7 @@ class CryptoAnalyzer(OrchestratorBase):
         self.rsi_calculator = None
         self.display_agent = None
 
-        # Initialiser à None pour un état de départ clair.
+        # Initialize to None for a clear initial state.
         self.coins: Optional[List[Dict]] = None
         self.precision_data: Optional[Dict[str, Dict]] = None
 
@@ -61,7 +61,7 @@ class CryptoAnalyzer(OrchestratorBase):
         self._initial_data_loaded = threading.Event()
 
     def register_services(self) -> None:
-        """Crée et enregistre les services gérés par l'orchestrateur."""
+        """Creates and registers services managed by the orchestrator."""
         self.db_manager = DatabaseManager(service_bus=self.service_bus)
         self.data_fetcher = DataFetcher(service_bus=self.service_bus)
         self.rsi_calculator = RSICalculator(service_bus=self.service_bus)
@@ -70,7 +70,7 @@ class CryptoAnalyzer(OrchestratorBase):
         self.services = [self.db_manager, self.data_fetcher, self.rsi_calculator, self.display_agent]
 
     def setup_event_subscriptions(self) -> None:
-        """Abonne les méthodes de l'orchestrateur aux événements du bus de services."""
+        """Subscribes orchestrator methods to service bus events."""
         self.service_bus.subscribe("RunAnalysisRequested", self._handle_run_analysis_requested)
         self.service_bus.subscribe("TopCoinsFetched", self._handle_top_coins_fetched)
         self.service_bus.subscribe("PrecisionDataFetched", self._handle_precision_data_fetched)
@@ -83,13 +83,13 @@ class CryptoAnalyzer(OrchestratorBase):
         self.service_bus.subscribe("WorkerFailed", self._handle_worker_failed)
 
     def start_workflow(self) -> None:
-        """Démarre le workflow d'analyse."""
+        """Starts the analysis workflow."""
         config_payload = AnalysisConfigurationProvided(session_guid=self.session_guid, config=self.config)
         self.service_bus.publish("AnalysisConfigurationProvided", config_payload, self.__class__.__name__)
         self.service_bus.publish("RunAnalysisRequested", RunAnalysisRequested(), self.__class__.__name__)
 
     def _handle_run_analysis_requested(self, _event: RunAnalysisRequested):
-        logger.info("Analyse démarrée. Demande des données initiales (top coins et précision).")
+        logger.info("Analysis started. Requesting initial data (top coins and precision).")
         self.service_bus.publish("FetchPrecisionDataRequested", FetchPrecisionDataRequested(), self.__class__.__name__)
         self.service_bus.publish("FetchTopCoinsRequested", {"n": self.config.top_n_coins}, self.__class__.__name__)
 
@@ -103,28 +103,32 @@ class CryptoAnalyzer(OrchestratorBase):
 
     def _start_analysis_if_ready(self):
         """
-        Vérifie si les deux flux de données initiaux ont été REÇUS (même s'ils sont vides),
-        puis lance l'analyse ou s'arrête proprement.
+        Checks if both initial data streams have been RECEIVED (even if empty),
+        then starts the analysis or stops cleanly.
         """
         try:
-            # Vérifier que les variables ne sont plus None.
-            if not (self.coins is not None and self.precision_data is not None and not self._initial_data_loaded.is_set()):
-                logger.debug("En attente de toutes les données initiales...")
+            # Check that variables are no longer None.
+            # Using early return pattern to avoid race conditions
+            if self._initial_data_loaded.is_set():
                 return
 
-            # Gérer le cas où les données reçues sont vides.
+            if self.coins is None or self.precision_data is None:
+                logger.debug("Waiting for all initial data...")
+                return
+
+            # Handle the case where received data is empty.
             if not self.coins or not self.precision_data:
-                logger.warning("Aucune crypto ou paire de marché n'a été trouvée. L'analyse ne peut pas continuer.")
+                logger.warning("No crypto or market pair found. Analysis cannot continue.")
                 self._processing_completed.set()
                 return
 
             self._initial_data_loaded.set()
-            logger.info("Données initiales (coins et précision) reçues. Démarrage du traitement.")
+            logger.info("Initial data (coins and precision) received. Starting processing.")
 
             usdc_base_symbols = {m["base_asset"] for m in self.precision_data.values() if m["quote_asset"] == "USDC"}
             original_coin_count = len(self.coins)
             self.coins = [c for c in self.coins if c.get("symbol", "").upper() in usdc_base_symbols]
-            logger.info(f"Filtrage des cryptos : {original_coin_count} -> {len(self.coins)} avec une paire USDC.")
+            logger.info(f"Filtering cryptos: {original_coin_count} -> {len(self.coins)} with USDC pair.")
 
             for coin in self.coins:
                 self.service_bus.publish("SingleCoinFetched", {"coin": coin}, self.__class__.__name__)
@@ -134,13 +138,13 @@ class CryptoAnalyzer(OrchestratorBase):
             if market_cap_values:
                 self.low_cap_threshold = pd.Series(market_cap_values).quantile(self.config.low_cap_percentile / 100)
             logger.info(
-                f"Seuil de faible capitalisation ({self.config.low_cap_percentile}e percentile) : ${self.low_cap_threshold:,.2f}"
+                f"Low capitalization threshold ({self.config.low_cap_percentile}th percentile): ${self.low_cap_threshold:,.2f}"
             )
 
             coins_to_process = [(c["id"], c["symbol"]) for c in self.coins]
             for timeframe, job in self.analysis_jobs.items():
                 job.set_coins_to_process(coins_to_process)
-                logger.info(f"Lancement du job pour {timeframe} avec {len(job.coins_to_process) + 1} paires.")
+                logger.info(f"Launching job for {timeframe} with {len(job.coins_to_process) + 1} pairs.")
 
                 self.service_bus.publish(
                     "FetchHistoricalPricesRequested",
@@ -157,7 +161,7 @@ class CryptoAnalyzer(OrchestratorBase):
                     )
         except Exception as e:
             logger.error(
-                f"Erreur critique lors de l'initialisation de l'analyse : {e}. Arrêt de l'application.", exc_info=True
+                f"Critical error during analysis initialization: {e}. Stopping application.", exc_info=True
             )
             # Publier l'événement de fin pour éviter le blocage
             self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
@@ -259,9 +263,9 @@ class CryptoAnalyzer(OrchestratorBase):
     def _handle_analysis_job_completed(self, event: AnalysisJobCompleted):
         with self._job_lock:
             self._job_completion_counter -= 1
-            logger.info(f"Job pour {event.timeframe} terminé. Restants : {self._job_completion_counter}")
+            logger.info(f"Job for {event.timeframe} completed. Remaining: {self._job_completion_counter}")
             if self._job_completion_counter <= 0:
-                logger.info("Tous les jobs d'analyse sont terminés. Préparation des résultats finaux.")
+                logger.info("All analysis jobs completed. Preparing final results.")
                 self.service_bus.publish(
                     "FinalResultsReady",
                     {"results": self.results, "weeks": self.config.weeks, "timeframes": self.config.timeframes},
@@ -270,12 +274,12 @@ class CryptoAnalyzer(OrchestratorBase):
 
     def _handle_worker_failed(self, event: WorkerFailed):
         logger.critical(
-            f"Le worker '{event.worker_name}' a signalé une défaillance critique: {event.reason}. "
-            "Déclenchement de l'arrêt général de l'application."
+            f"Worker '{event.worker_name}' reported a critical failure: {event.reason}. "
+            "Triggering general application shutdown."
         )
-        # Publie l'événement de fin pour débloquer la boucle principale et tout arrêter proprement
+        # Publish the end event to unblock the main loop and stop everything cleanly
         self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
 
     def _handle_display_completed(self, _event: DisplayCompleted):
-        logger.info("Affichage terminé. Déclenchement de l'arrêt du programme.")
+        logger.info("Display completed. Triggering program shutdown.")
         self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
