@@ -24,28 +24,42 @@ class RSICalculator(QueueWorkerThread):
         self.service_bus.subscribe("CalculateRSIRequested", self._handle_calculate_rsi_requested)
 
     def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
-        self.session_guid = event.session_guid
-        config = event.config
-        self.periods = config.rsi_period
-        logger.info(f"RSICalculator received configuration for session {self.session_guid}.")
+        try:
+            self.session_guid = event.session_guid
+            config = event.config
+            self.periods = config.rsi_period
+            logger.info(f"RSICalculator received configuration for session {self.session_guid}.")
+        except Exception as e:
+            error_msg = f"Error handling configuration provided: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.log_message(error_msg)
 
     def _handle_calculate_rsi_requested(self, event: CalculateRSIRequested):
-        prices_series = None
-        if event.prices_series_json:
-            try:
-                prices_series = pd.read_json(StringIO(event.prices_series_json), orient="split", typ="series")
-                prices_series.index = pd.to_datetime(prices_series.index, unit="ms", utc=True)
-            except Exception as e:
-                logger.error(f"Cannot reconstruct price Series for {event.coin_id_symbol}: {e}")
+        try:
+            prices_series = None
+            if event.prices_series_json:
+                try:
+                    prices_series = pd.read_json(StringIO(event.prices_series_json), orient="split", typ="series")
+                    prices_series.index = pd.to_datetime(prices_series.index, unit="ms", utc=True)
+                except Exception as e:
+                    error_msg = f"Cannot reconstruct price Series for {event.coin_id_symbol}: {e}"
+                    logger.error(error_msg)
+                    self.log_message(error_msg)
 
-        # Pass the reconstructed Series (or None) to the calculation task.
-        self.add_task("_calculate_rsi_task", event.coin_id_symbol, prices_series, event.timeframe)
+            # Pass the reconstructed Series (or None) to the calculation task.
+            self.add_task("_calculate_rsi_task", event.coin_id_symbol, prices_series, event.timeframe)
+        except Exception as e:
+            error_msg = f"Error handling calculate RSI requested: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.log_message(error_msg)
 
     def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: Optional[pd.Series], timeframe: str) -> None:
         rsi_series = None
 
         if self.periods is None:
-            logger.error("RSI period has not been configured. Stopping calculation.")
+            error_msg = "RSI period has not been configured. Stopping calculation."
+            logger.error(error_msg)
+            self.log_message(error_msg)
         elif data is None or data.empty or len(data.dropna()) < self.periods + 1:
             logger.warning(
                 f"Skipping RSI calculation for {coin_id_symbol} ({timeframe}): "
@@ -63,7 +77,9 @@ class RSICalculator(QueueWorkerThread):
                 rsi_series[rs == np.inf] = 100
                 rsi_series = rsi_series.dropna()
             except Exception as e:
-                logger.error(f"Unexpected error calculating RSI for {coin_id_symbol}: {e}", exc_info=True)
+                error_msg = f"Unexpected error calculating RSI for {coin_id_symbol}: {e}"
+                logger.error(error_msg, exc_info=True)
+                self.log_message(error_msg)
                 rsi_series = None  # Ensure the result is None in case of failure
 
         if self.service_bus:

@@ -39,56 +39,88 @@ class DatabaseManager(QueueWorkerThread):
         self.service_bus.subscribe("PrecisionDataFetched", self._handle_precision_data_fetched)
 
     def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
-        self.session_guid = event.session_guid
-        logger.info(f"DatabaseManager received configuration for session {self.session_guid}.")
+        try:
+            self.session_guid = event.session_guid
+            logger.info(f"DatabaseManager received configuration for session {self.session_guid}.")
+        except Exception as e:
+            error_msg = f"Error handling configuration provided: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.log_message(error_msg)
 
     def _handle_single_coin_fetched(self, event: SingleCoinFetched):
-        if event.coin:
-            self.add_task("_db_save_token", event.coin, self.session_guid)
+        try:
+            if event.coin:
+                self.add_task("_db_save_token", event.coin, self.session_guid)
+        except Exception as e:
+            error_msg = f"Error handling single coin fetched: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.log_message(error_msg)
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
-        if not event.prices_df_json:
-            return
         try:
-            prices_df = pd.read_json(StringIO(event.prices_df_json), orient="split")
-            prices_df.index = pd.to_datetime(prices_df.index, unit="ms", utc=True)
+            if not event.prices_df_json:
+                return
+            try:
+                prices_df = pd.read_json(StringIO(event.prices_df_json), orient="split")
+                prices_df.index = pd.to_datetime(prices_df.index, unit="ms", utc=True)
+            except Exception as e:
+                error_msg = f"Cannot reconstruct price DataFrame for {event.coin_id_symbol}: {e}"
+                logger.error(error_msg)
+                self.log_message(error_msg)
+                return
+            if prices_df is not None and not prices_df.empty:
+                self.add_task("_db_save_prices", event.coin_id_symbol, prices_df, self.session_guid, event.timeframe)
         except Exception as e:
-            logger.error(
-                f"Cannot reconstruct price DataFrame for {event.coin_id_symbol}: {e}"
-            )
-            return
-        if prices_df is not None and not prices_df.empty:
-            self.add_task("_db_save_prices", event.coin_id_symbol, prices_df, self.session_guid, event.timeframe)
+            error_msg = f"Error handling historical prices fetched: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.log_message(error_msg)
 
     def _handle_rsi_calculated(self, event: RSICalculated):
-        if not event.rsi_series_json:
-            return
         try:
-            rsi_series = pd.read_json(StringIO(event.rsi_series_json), orient="split", typ="series")
-            rsi_series.index = pd.to_datetime(rsi_series.index, unit="ms", utc=True)
+            if not event.rsi_series_json:
+                return
+            try:
+                rsi_series = pd.read_json(StringIO(event.rsi_series_json), orient="split", typ="series")
+                rsi_series.index = pd.to_datetime(rsi_series.index, unit="ms", utc=True)
+            except Exception as e:
+                error_msg = f"Cannot reconstruct RSI Series for database for {event.coin_id_symbol}: {e}"
+                logger.error(error_msg)
+                self.log_message(error_msg)
+                return
+            if rsi_series is not None and not rsi_series.empty:
+                self.add_task("_db_save_rsi", event.coin_id_symbol, rsi_series, self.session_guid, event.timeframe)
         except Exception as e:
-            logger.error(f"Cannot reconstruct RSI Series for database for {event.coin_id_symbol}: {e}")
-            return
-        if rsi_series is not None and not rsi_series.empty:
-            self.add_task("_db_save_rsi", event.coin_id_symbol, rsi_series, self.session_guid, event.timeframe)
+            error_msg = f"Error handling RSI calculated: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.log_message(error_msg)
 
     def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):
-        result = event.result
-        if result:
-            task_args = (
-                (result["coin_id"], result["coin_symbol"]),
-                datetime.now(timezone.utc).isoformat(),
-                result["correlation"],
-                result["market_cap"],
-                result["low_cap_quartile"],
-                self.session_guid,
-                event.timeframe,
-            )
-            self.add_task("_db_save_correlation", *task_args)
+        try:
+            result = event.result
+            if result:
+                task_args = (
+                    (result["coin_id"], result["coin_symbol"]),
+                    datetime.now(timezone.utc).isoformat(),
+                    result["correlation"],
+                    result["market_cap"],
+                    result["low_cap_quartile"],
+                    self.session_guid,
+                    event.timeframe,
+                )
+                self.add_task("_db_save_correlation", *task_args)
+        except Exception as e:
+            error_msg = f"Error handling correlation analyzed: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.log_message(error_msg)
 
     def _handle_precision_data_fetched(self, event: PrecisionDataFetched):
-        if event.precision_data:
-            self.add_task("_db_save_precision_data", event.precision_data, self.session_guid)
+        try:
+            if event.precision_data:
+                self.add_task("_db_save_precision_data", event.precision_data, self.session_guid)
+        except Exception as e:
+            error_msg = f"Error handling precision data fetched: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.log_message(error_msg)
 
     def run(self):
         self.conn = sqlite3.connect(self.db_name, check_same_thread=False)
@@ -156,7 +188,9 @@ class DatabaseManager(QueueWorkerThread):
             )
             self.conn.commit()
         except Exception as e:
-            logger.error(f"Error initializing tables: {e}", exc_info=True)
+            error_msg = f"Error initializing tables: {e}"
+            logger.error(error_msg, exc_info=True)
+            self.log_message(error_msg)
             raise
 
     def _db_save_precision_data(self, precision_data: List[Dict], session_guid: str) -> None:
@@ -188,13 +222,17 @@ class DatabaseManager(QueueWorkerThread):
             self.conn.commit()
             logger.info(f"{len(data_to_insert)} precision records inserted into database.")
         except Exception as e:
-            logger.error(f"Error saving precision data: {e}", exc_info=True)
+            error_msg = f"Error saving precision data: {e}"
+            logger.error(error_msg, exc_info=True)
+            self.log_message(error_msg)
 
     def _db_save_token(self, coin: Dict, session_guid: Optional[str]) -> None:
         coin_id = coin.get('id')
         try:
             if not coin_id:
-                logger.error("Missing 'id' key in token payload.")
+                error_msg = "Missing 'id' key in token payload."
+                logger.error(error_msg)
+                self.log_message(error_msg)
                 return
 
             def safe_int(value):
@@ -243,7 +281,9 @@ class DatabaseManager(QueueWorkerThread):
             self.conn.commit()
             logger.info(f"Token {coin_id} saved with session_guid={session_guid}.")
         except Exception as e:
-            logger.error(f"Error saving token {coin_id}: {e}")
+            error_msg = f"Error saving token {coin_id}: {e}"
+            logger.error(error_msg)
+            self.log_message(error_msg)
 
     def _db_save_prices(self, coin_id_symbol: Tuple[str, str], prices_df: pd.DataFrame, session_guid: Optional[str], timeframe: str) -> None:
         coin_id, coin_symbol = coin_id_symbol
@@ -265,7 +305,9 @@ class DatabaseManager(QueueWorkerThread):
             self.conn.commit()
             logger.info(f"{len(data_to_insert)} prices for {coin_id} saved (session={session_guid}).")
         except Exception as e:
-            logger.error(f"Error bulk saving prices for {coin_id}: {e}", exc_info=True)
+            error_msg = f"Error bulk saving prices for {coin_id}: {e}"
+            logger.error(error_msg, exc_info=True)
+            self.log_message(error_msg)
 
     def _db_save_rsi(self, coin_id_symbol: Tuple[str, str], rsi_series: pd.Series, session_guid: Optional[str], timeframe: str) -> None:
         coin_id, coin_symbol = coin_id_symbol
@@ -286,7 +328,9 @@ class DatabaseManager(QueueWorkerThread):
             self.conn.commit()
             logger.info(f"{len(data_to_insert)} RSI for {coin_id} saved (session={session_guid}).")
         except Exception as e:
-            logger.error(f"Error bulk saving RSI for {coin_id}: {e}", exc_info=True)
+            error_msg = f"Error bulk saving RSI for {coin_id}: {e}"
+            logger.error(error_msg, exc_info=True)
+            self.log_message(error_msg)
 
     def _db_save_correlation(self, coin_id_symbol: Tuple[str, str], run_timestamp: str, correlation: float, market_cap: float, low_cap_quartile: bool,
                              session_guid: Optional[str], timeframe: str) -> None:
@@ -299,11 +343,15 @@ class DatabaseManager(QueueWorkerThread):
             self.conn.commit()
             logger.info(f"Correlation for {coin_id} saved with session_guid={session_guid}.")
         except Exception as e:
-            logger.error(f"Error saving correlation for {coin_id}: {e}")
+            error_msg = f"Error saving correlation for {coin_id}: {e}"
+            logger.error(error_msg)
+            self.log_message(error_msg)
 
     def _close(self) -> None:
         try:
             if self.conn:
                 self.conn.close()
         except Exception as e:
-            logger.error(f"Error closing database: {e}")
+            error_msg = f"Error closing database: {e}"
+            logger.error(error_msg)
+            self.log_message(error_msg)

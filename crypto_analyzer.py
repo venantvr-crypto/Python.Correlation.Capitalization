@@ -89,17 +89,32 @@ class CryptoAnalyzer(OrchestratorBase):
         self.service_bus.publish("RunAnalysisRequested", RunAnalysisRequested(), self.__class__.__name__)
 
     def _handle_run_analysis_requested(self, _event: RunAnalysisRequested):
-        logger.info("Analysis started. Requesting initial data (top coins and precision).")
-        self.service_bus.publish("FetchPrecisionDataRequested", FetchPrecisionDataRequested(), self.__class__.__name__)
-        self.service_bus.publish("FetchTopCoinsRequested", {"n": self.config.top_n_coins}, self.__class__.__name__)
+        try:
+            logger.info("Analysis started. Requesting initial data (top coins and precision).")
+            self.service_bus.publish("FetchPrecisionDataRequested", FetchPrecisionDataRequested(), self.__class__.__name__)
+            self.service_bus.publish("FetchTopCoinsRequested", {"n": self.config.top_n_coins}, self.__class__.__name__)
+        except Exception as e:
+            error_msg = f"Error handling run analysis requested: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
 
     def _handle_precision_data_fetched(self, event: PrecisionDataFetched):
-        self.precision_data = {item["symbol"]: item for item in event.precision_data}
-        self._start_analysis_if_ready()
+        try:
+            self.precision_data = {item["symbol"]: item for item in event.precision_data}
+            self._start_analysis_if_ready()
+        except Exception as e:
+            error_msg = f"Error handling precision data fetched: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
 
     def _handle_top_coins_fetched(self, event: TopCoinsFetched):
-        self.coins = event.coins
-        self._start_analysis_if_ready()
+        try:
+            self.coins = event.coins
+            self._start_analysis_if_ready()
+        except Exception as e:
+            error_msg = f"Error handling top coins fetched: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
 
     def _start_analysis_if_ready(self):
         """
@@ -167,68 +182,92 @@ class CryptoAnalyzer(OrchestratorBase):
             self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
-        prices_df = None
-        if event.prices_df_json:
-            try:
-                prices_df = pd.read_json(StringIO(event.prices_df_json), orient="split")
-                prices_df.index = pd.to_datetime(prices_df.index, unit="ms", utc=True)
-            except Exception as e:
-                logger.error(f"Impossible de reconstruire le DataFrame des prix pour {event.coin_id_symbol}: {e}")
+        try:
+            prices_df = None
+            if event.prices_df_json:
+                try:
+                    prices_df = pd.read_json(StringIO(event.prices_df_json), orient="split")
+                    prices_df.index = pd.to_datetime(prices_df.index, unit="ms", utc=True)
+                except Exception as e:
+                    error_msg = f"Impossible de reconstruire le DataFrame des prix pour {event.coin_id_symbol}: {e}"
+                    logger.error(error_msg)
 
-        if prices_df is None or prices_df.empty:
+            if prices_df is None or prices_df.empty:
+                self.service_bus.publish(
+                    "CoinProcessingFailed",
+                    {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe},
+                    self.__class__.__name__
+                )
+                return
+
+            close_series = prices_df["close"]
+            # noinspection PyUnresolvedReferences
+            series_json = close_series.to_json(orient="split")
+
+            # On publie la dataclass correspondante avec la chaîne JSON.
+            rsi_request_event = CalculateRSIRequested(
+                coin_id_symbol=event.coin_id_symbol, prices_series_json=series_json, timeframe=event.timeframe
+            )
+            sqlite_business_logger.log(self.__class__.__name__, f"CalculateRSIRequested pour {event.coin_id_symbol}")
+            self.service_bus.publish("CalculateRSIRequested", rsi_request_event, self.__class__.__name__)
+        except Exception as e:
+            error_msg = f"Error handling historical prices fetched: {e}"
+            logger.critical(error_msg, exc_info=True)
             self.service_bus.publish(
                 "CoinProcessingFailed",
                 {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe},
                 self.__class__.__name__
             )
-            return
-
-        close_series = prices_df["close"]
-        # noinspection PyUnresolvedReferences
-        series_json = close_series.to_json(orient="split")
-
-        # On publie la dataclass correspondante avec la chaîne JSON.
-        rsi_request_event = CalculateRSIRequested(
-            coin_id_symbol=event.coin_id_symbol, prices_series_json=series_json, timeframe=event.timeframe
-        )
-        sqlite_business_logger.log(self.__class__.__name__, f"CalculateRSIRequested pour {event.coin_id_symbol}")
-        self.service_bus.publish("CalculateRSIRequested", rsi_request_event, self.__class__.__name__)
 
     def _handle_rsi_calculated(self, event: RSICalculated):
-        job = self.analysis_jobs.get(event.timeframe)
-        if not job:
-            return
+        try:
+            job = self.analysis_jobs.get(event.timeframe)
+            if not job:
+                return
 
-        rsi_series = None
-        # NOUVEAU : Bloc de désérialisation
-        if event.rsi_series_json:
-            try:
-                rsi_series = pd.read_json(StringIO(event.rsi_series_json), orient="split", typ="series")
-                rsi_series.index = pd.to_datetime(rsi_series.index, unit="ms", utc=True)
-            except Exception as e:
-                logger.error(f"Impossible de reconstruire la Series RSI pour {event.coin_id_symbol}: {e}")
+            rsi_series = None
+            # NOUVEAU : Bloc de désérialisation
+            if event.rsi_series_json:
+                try:
+                    rsi_series = pd.read_json(StringIO(event.rsi_series_json), orient="split", typ="series")
+                    rsi_series.index = pd.to_datetime(rsi_series.index, unit="ms", utc=True)
+                except Exception as e:
+                    error_msg = f"Impossible de reconstruire la Series RSI pour {event.coin_id_symbol}: {e}"
+                    logger.error(error_msg)
 
-        # La suite de la logique utilise la Series reconstruite
-        if rsi_series is None or rsi_series.empty:
+            # La suite de la logique utilise la Series reconstruite
+            if rsi_series is None or rsi_series.empty:
+                self.service_bus.publish(
+                    "CoinProcessingFailed",
+                    {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe},
+                    self.__class__.__name__
+                )
+                return
+
+            key = (event.coin_id_symbol[0], event.coin_id_symbol[1], event.timeframe)
+            self.rsi_results[key] = rsi_series
+
+            if event.coin_id_symbol[1].lower() == "btc":
+                job.btc_rsi = rsi_series
+
+            job.decrement_counter()
+        except Exception as e:
+            error_msg = f"Error handling RSI calculated: {e}"
+            logger.critical(error_msg, exc_info=True)
             self.service_bus.publish(
                 "CoinProcessingFailed",
                 {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe},
                 self.__class__.__name__
             )
-            return
-
-        key = (event.coin_id_symbol[0], event.coin_id_symbol[1], event.timeframe)
-        self.rsi_results[key] = rsi_series
-
-        if event.coin_id_symbol[1].lower() == "btc":
-            job.btc_rsi = rsi_series
-
-        job.decrement_counter()
 
     def _handle_coin_processing_failed(self, event: CoinProcessingFailed):
-        job = self.analysis_jobs.get(event.timeframe)
-        if job:
-            job.decrement_counter()
+        try:
+            job = self.analysis_jobs.get(event.timeframe)
+            if job:
+                job.decrement_counter()
+        except Exception as e:
+            error_msg = f"Error handling coin processing failed: {e}"
+            logger.critical(error_msg, exc_info=True)
 
     def analyze_correlation(
             self, coin_id_symbol: Tuple[str, str], coin_rsi: pd.Series, btc_rsi: pd.Series, timeframe: str
@@ -257,29 +296,48 @@ class CryptoAnalyzer(OrchestratorBase):
         self.service_bus.publish("CorrelationAnalyzed", {"result": result, "timeframe": timeframe}, self.__class__.__name__)
 
     def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):
-        if event.result:
-            self.results.append(event.result)
+        try:
+            if event.result:
+                self.results.append(event.result)
+        except Exception as e:
+            error_msg = f"Error handling correlation analyzed: {e}"
+            logger.critical(error_msg, exc_info=True)
 
     def _handle_analysis_job_completed(self, event: AnalysisJobCompleted):
-        with self._job_lock:
-            self._job_completion_counter -= 1
-            logger.info(f"Job for {event.timeframe} completed. Remaining: {self._job_completion_counter}")
-            if self._job_completion_counter <= 0:
-                logger.info("All analysis jobs completed. Preparing final results.")
-                self.service_bus.publish(
-                    "FinalResultsReady",
-                    {"results": self.results, "weeks": self.config.weeks, "timeframes": self.config.timeframes},
-                    self.__class__.__name__
-                )
+        try:
+            with self._job_lock:
+                self._job_completion_counter -= 1
+                logger.info(f"Job for {event.timeframe} completed. Remaining: {self._job_completion_counter}")
+                if self._job_completion_counter <= 0:
+                    logger.info("All analysis jobs completed. Preparing final results.")
+                    self.service_bus.publish(
+                        "FinalResultsReady",
+                        {"results": self.results, "weeks": self.config.weeks, "timeframes": self.config.timeframes},
+                        self.__class__.__name__
+                    )
+        except Exception as e:
+            error_msg = f"Error handling analysis job completed: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
 
     def _handle_worker_failed(self, event: WorkerFailed):
-        logger.critical(
-            f"Worker '{event.worker_name}' reported a critical failure: {event.reason}. "
-            "Triggering general application shutdown."
-        )
-        # Publish the end event to unblock the main loop and stop everything cleanly
-        self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
+        try:
+            logger.critical(
+                f"Worker '{event.worker_name}' reported a critical failure: {event.reason}. "
+                "Triggering general application shutdown."
+            )
+            # Publish the end event to unblock the main loop and stop everything cleanly
+            self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
+        except Exception as e:
+            error_msg = f"Error handling worker failed: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
 
     def _handle_display_completed(self, _event: DisplayCompleted):
-        logger.info("Display completed. Triggering program shutdown.")
-        self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
+        try:
+            logger.info("Display completed. Triggering program shutdown.")
+            self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
+        except Exception as e:
+            error_msg = f"Error handling display completed: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)

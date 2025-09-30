@@ -71,7 +71,9 @@ class DataFetcher(QueueWorkerThread):
                     break
                 coins.extend(new_coins)
             except requests.exceptions.RequestException as e:
-                logger.error(f"Final failure fetching page {page} after multiple attempts: {e}")
+                error_msg = f"Final failure fetching page {page} after multiple attempts: {e}"
+                logger.error(error_msg)
+                self.log_message(error_msg)
                 logger.warning("Stopping top coins collection due to persistent network error.")
                 break
 
@@ -109,7 +111,9 @@ class DataFetcher(QueueWorkerThread):
                     prices_df["timestamp"] = pd.to_datetime(prices_df["timestamp"], unit="ms", utc=True)
                     prices_df.set_index("timestamp", inplace=True)
         except Exception as e:
-            logger.error(f"Final failure fetching prices for {symbol}: {e}")
+            error_msg = f"Final failure fetching prices for {symbol}: {e}"
+            logger.error(error_msg)
+            self.log_message(error_msg)
 
         if self.service_bus:
             prices_json = prices_df.to_json(orient="split") if prices_df is not None else None
@@ -174,7 +178,9 @@ class DataFetcher(QueueWorkerThread):
                         precision_data.append(data)
             logger.info(f"{len(precision_data)} active markets found on Binance.")
         except Exception as e:
-            logger.error(f"Failed to fetch precision data from Binance: {e}")
+            error_msg = f"Failed to fetch precision data from Binance: {e}"
+            logger.error(error_msg)
+            self.log_message(error_msg)
 
         if self.service_bus:
             length = len(precision_data)
@@ -182,14 +188,34 @@ class DataFetcher(QueueWorkerThread):
             self.service_bus.publish("PrecisionDataFetched", PrecisionDataFetched(precision_data=precision_data), self.__class__.__name__)
 
     def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
-        self.session_guid = event.session_guid
-        logger.info(f"DataFetcher received configuration for session {self.session_guid}.")
+        try:
+            self.session_guid = event.session_guid
+            logger.info(f"DataFetcher received configuration for session {self.session_guid}.")
+        except Exception as e:
+            error_msg = f"Error handling configuration provided: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.log_message(error_msg)
 
     def _handle_fetch_top_coins_requested(self, event: FetchTopCoinsRequested):
-        self.add_task("_fetch_top_coins_task", event.n)
+        try:
+            self.add_task("_fetch_top_coins_task", event.n)
+        except Exception as e:
+            error_msg = f"Error handling fetch top coins requested: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.log_message(error_msg)
 
     def _handle_fetch_historical_prices_requested(self, event: FetchHistoricalPricesRequested):
-        self.add_task("_fetch_historical_prices_task", event.coin_id_symbol, event.weeks, event.timeframe)
+        try:
+            self.add_task("_fetch_historical_prices_task", event.coin_id_symbol, event.weeks, event.timeframe)
+        except Exception as e:
+            error_msg = f"Error handling fetch historical prices requested: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.log_message(error_msg)
 
     def _handle_fetch_precision_data_requested(self, _event: FetchPrecisionDataRequested):
-        self.add_task("_fetch_precision_data_task")
+        try:
+            self.add_task("_fetch_precision_data_task")
+        except Exception as e:
+            error_msg = f"Error handling fetch precision data requested: {e}"
+            logger.critical(error_msg, exc_info=True)
+            self.log_message(error_msg)
