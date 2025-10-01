@@ -89,16 +89,24 @@ class CryptoAnalyzer(OrchestratorBase):
         self.service_bus.publish("RunAnalysisRequested", RunAnalysisRequested(), self.__class__.__name__)
 
     def _handle_run_analysis_requested(self, _event: RunAnalysisRequested):
+
         try:
             logger.info("Analysis started. Requesting initial data (top coins and precision).")
-            self.service_bus.publish("FetchPrecisionDataRequested", FetchPrecisionDataRequested(), self.__class__.__name__)
-            self.service_bus.publish("FetchTopCoinsRequested", {"n": self.config.top_n_coins}, self.__class__.__name__)
+
+            if self.service_bus is not None:
+                self.service_bus.publish("FetchPrecisionDataRequested", FetchPrecisionDataRequested(), self.__class__.__name__)
+
+            if self.service_bus is not None:
+                from events import FetchTopCoinsRequested
+
+                self.service_bus.publish("FetchTopCoinsRequested", FetchTopCoinsRequested(n=self.config.top_n_coins), self.__class__.__name__)
         except Exception as e:
             error_msg = f"Error handling run analysis requested: {e}"
             logger.critical(error_msg, exc_info=True)
             self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
 
     def _handle_precision_data_fetched(self, event: PrecisionDataFetched):
+
         try:
             self.precision_data = {item["symbol"]: item for item in event.precision_data}
             self._start_analysis_if_ready()
@@ -108,6 +116,7 @@ class CryptoAnalyzer(OrchestratorBase):
             self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
 
     def _handle_top_coins_fetched(self, event: TopCoinsFetched):
+
         try:
             self.coins = event.coins
             self._start_analysis_if_ready()
@@ -121,6 +130,7 @@ class CryptoAnalyzer(OrchestratorBase):
         Checks if both initial data streams have been RECEIVED (even if empty),
         then starts the analysis or stops cleanly.
         """
+
         try:
             # Check that variables are no longer None.
             # Using early return pattern to avoid race conditions
@@ -152,8 +162,10 @@ class CryptoAnalyzer(OrchestratorBase):
             market_cap_values = [mc for mc in self.market_caps.values() if mc > 0]
             if market_cap_values:
                 self.low_cap_threshold = pd.Series(market_cap_values).quantile(self.config.low_cap_percentile / 100)
+
             logger.info(
                 f"Low capitalization threshold ({self.config.low_cap_percentile}th percentile): ${self.low_cap_threshold:,.2f}"
+
             )
 
             coins_to_process = [(c["id"], c["symbol"]) for c in self.coins]
@@ -165,6 +177,7 @@ class CryptoAnalyzer(OrchestratorBase):
                     "FetchHistoricalPricesRequested",
                     {"coin_id_symbol": ("bitcoin", "btc"), "weeks": self.config.weeks, "timeframe": timeframe},
                     self.__class__.__name__
+
                 )
 
                 for coin_id, symbol in job.coins_to_process:
@@ -173,15 +186,18 @@ class CryptoAnalyzer(OrchestratorBase):
                         "FetchHistoricalPricesRequested",
                         {"coin_id_symbol": (coin_id, symbol), "weeks": self.config.weeks, "timeframe": timeframe},
                         self.__class__.__name__
+
                     )
         except Exception as e:
             logger.error(
                 f"Critical error during analysis initialization: {e}. Stopping application.", exc_info=True
+
             )
             # Publier l'événement de fin pour éviter le blocage
             self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
+
         try:
             prices_df = self._deserialize_prices_dataframe(event.prices_df_json, event.coin_id_symbol)
 
@@ -190,6 +206,7 @@ class CryptoAnalyzer(OrchestratorBase):
                     "CoinProcessingFailed",
                     {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe},
                     self.__class__.__name__
+
                 )
                 return
 
@@ -199,6 +216,7 @@ class CryptoAnalyzer(OrchestratorBase):
 
             rsi_request_event = CalculateRSIRequested(
                 coin_id_symbol=event.coin_id_symbol, prices_series_json=series_json, timeframe=event.timeframe
+
             )
             sqlite_business_logger.log(self.__class__.__name__, f"CalculateRSIRequested pour {event.coin_id_symbol}")
             self.service_bus.publish("CalculateRSIRequested", rsi_request_event, self.__class__.__name__)
@@ -209,12 +227,15 @@ class CryptoAnalyzer(OrchestratorBase):
                 "CoinProcessingFailed",
                 {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe},
                 self.__class__.__name__
+
             )
 
     # noinspection PyMethodMayBeStatic
     def _deserialize_prices_dataframe(self, prices_json: Optional[str], coin_id_symbol: Tuple[str, str]) -> Optional[pd.DataFrame]:
+
         if not prices_json:
             return None
+
         try:
             prices_df = pd.read_json(StringIO(prices_json), orient="split")
             prices_df.index = pd.to_datetime(prices_df.index, unit="ms", utc=True)
@@ -225,41 +246,58 @@ class CryptoAnalyzer(OrchestratorBase):
             return None
 
     def _handle_rsi_calculated(self, event: RSICalculated):
+
         try:
+            logger.info(f"[CORRELATION-DEBUG] Received RSI for {event.coin_id_symbol} on {event.timeframe}")
             job = self.analysis_jobs.get(event.timeframe)
+
             if not job:
+                logger.warning(f"[CORRELATION-DEBUG] No job found for timeframe {event.timeframe}")
                 return
 
             rsi_series = self._deserialize_rsi_series(event.rsi_series_json, event.coin_id_symbol)
 
             if rsi_series is None or rsi_series.empty:
-                self.service_bus.publish(
-                    "CoinProcessingFailed",
-                    {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe},
-                    self.__class__.__name__
-                )
+                logger.warning(f"[CORRELATION-DEBUG] RSI series is None or empty for {event.coin_id_symbol}")
+
+                if self.service_bus is not None:
+                    self.service_bus.publish(
+                        "CoinProcessingFailed",
+                        {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe},
+                        self.__class__.__name__
+
+                    )
+
                 return
 
             key = (event.coin_id_symbol[0], event.coin_id_symbol[1], event.timeframe)
             self.rsi_results[key] = rsi_series
+            logger.info(f"[CORRELATION-DEBUG] Stored RSI for {event.coin_id_symbol}")
 
             if event.coin_id_symbol[1].lower() == "btc":
                 job.btc_rsi = rsi_series
+                logger.info(f"[CORRELATION-DEBUG] Set BTC RSI for {event.timeframe}")
 
+            logger.info(f"[CORRELATION-DEBUG] About to decrement counter for {event.timeframe}")
             job.decrement_counter()
         except Exception as e:
             error_msg = f"Error handling RSI calculated: {e}"
             logger.critical(error_msg, exc_info=True)
-            self.service_bus.publish(
-                "CoinProcessingFailed",
-                {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe},
-                self.__class__.__name__
-            )
+
+            if self.service_bus is not None:
+                self.service_bus.publish(
+                    "CoinProcessingFailed",
+                    {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe},
+                    self.__class__.__name__
+
+                )
 
     # noinspection PyMethodMayBeStatic
     def _deserialize_rsi_series(self, rsi_json: Optional[str], coin_id_symbol: Tuple[str, str]) -> Optional[pd.Series]:
+
         if not rsi_json:
             return None
+
         try:
             rsi_series = pd.read_json(StringIO(rsi_json), orient="split", typ="series")
             rsi_series.index = pd.to_datetime(rsi_series.index, unit="ms", utc=True)
@@ -270,6 +308,7 @@ class CryptoAnalyzer(OrchestratorBase):
             return None
 
     def _handle_coin_processing_failed(self, event: CoinProcessingFailed):
+
         try:
             job = self.analysis_jobs.get(event.timeframe)
             if job:
@@ -280,16 +319,21 @@ class CryptoAnalyzer(OrchestratorBase):
 
     def analyze_correlation(
             self, coin_id_symbol: Tuple[str, str], coin_rsi: pd.Series, btc_rsi: pd.Series, timeframe: str
+
     ):
         common_index_rsi = btc_rsi.index.intersection(coin_rsi.index)
+
         if len(common_index_rsi) < self.config.rsi_period:
+            logger.debug(f"[CORRELATION-DEBUG] Skipping {coin_id_symbol}: insufficient data ({len(common_index_rsi)} < {self.config.rsi_period})")
             return
 
         correlation = coin_rsi.loc[common_index_rsi].corr(btc_rsi.loc[common_index_rsi])
 
         if pd.isna(correlation) or abs(correlation) < self.config.correlation_threshold:
+            logger.debug(f"[CORRELATION-DEBUG] Skipping {coin_id_symbol}: correlation {correlation} below threshold {self.config.correlation_threshold}")
             return
 
+        logger.info(f"[CORRELATION-DEBUG] Found valid correlation for {coin_id_symbol}: {correlation}")
         market_cap = self.market_caps.get(coin_id_symbol[1].lower(), 0)
         low_cap_quartile = market_cap <= self.low_cap_threshold
 
@@ -300,11 +344,13 @@ class CryptoAnalyzer(OrchestratorBase):
             "market_cap": market_cap,
             "low_cap_quartile": bool(low_cap_quartile),  # Conversion de np.bool_ -> bool
             "timeframe": timeframe,
+
         }
         sqlite_business_logger.log(self.__class__.__name__, f"CorrelationAnalyzed avec {result}")
         self.service_bus.publish("CorrelationAnalyzed", {"result": result, "timeframe": timeframe}, self.__class__.__name__)
 
     def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):
+
         try:
             if event.result:
                 self.results.append(event.result)
@@ -313,6 +359,7 @@ class CryptoAnalyzer(OrchestratorBase):
             logger.critical(error_msg, exc_info=True)
 
     def _handle_analysis_job_completed(self, event: AnalysisJobCompleted):
+
         try:
             with self._job_lock:
                 self._job_completion_counter -= 1
@@ -323,6 +370,7 @@ class CryptoAnalyzer(OrchestratorBase):
                         "FinalResultsReady",
                         {"results": self.results, "weeks": self.config.weeks, "timeframes": self.config.timeframes},
                         self.__class__.__name__
+
                     )
         except Exception as e:
             error_msg = f"Error handling analysis job completed: {e}"
@@ -330,10 +378,12 @@ class CryptoAnalyzer(OrchestratorBase):
             self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
 
     def _handle_worker_failed(self, event: WorkerFailed):
+
         try:
             logger.critical(
                 f"Worker '{event.worker_name}' reported a critical failure: {event.reason}. "
                 "Triggering general application shutdown."
+
             )
             # Publish the end event to unblock the main loop and stop everything cleanly
             self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
@@ -343,6 +393,7 @@ class CryptoAnalyzer(OrchestratorBase):
             self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
 
     def _handle_display_completed(self, _event: DisplayCompleted):
+
         try:
             logger.info("Display completed. Triggering program shutdown.")
             self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
@@ -350,3 +401,16 @@ class CryptoAnalyzer(OrchestratorBase):
             error_msg = f"Error handling display completed: {e}"
             logger.critical(error_msg, exc_info=True)
             self.service_bus.publish("AllProcessingCompleted", AllProcessingCompleted(), self.__class__.__name__)
+
+    def _stop_services(self) -> None:
+        """Override to wait for DatabaseManager to finish processing before stopping."""
+        logger.info("Waiting for DatabaseManager to finish processing all tasks...")
+
+        if self.db_manager and self.db_manager.is_alive():
+            if not self.db_manager.wait_for_queue_completion(timeout=30.0):
+                logger.warning("DatabaseManager did not complete all tasks within timeout.")
+            else:
+                logger.info("DatabaseManager has processed all tasks successfully.")
+
+        # Call parent implementation to stop all services
+        super()._stop_services()

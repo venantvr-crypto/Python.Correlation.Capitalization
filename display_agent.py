@@ -34,16 +34,19 @@ class DisplayAgent(QueueWorkerThread):
         self.service_bus.subscribe("FinalResultsReady", self._handle_final_results_ready)
 
     def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
+
         try:
             self.session_guid = event.session_guid
             logger.info(
                 f"{BLACK_ON_YELLOW}DisplayAgent{RESET} received configuration for session {BOLD_WHITE}{self.session_guid}{RESET}."
+
             )
         except Exception as e:
             error_msg = f"Error handling configuration provided: {e}"
             logger.critical(error_msg, exc_info=True)
 
     def _handle_final_results_ready(self, event: FinalResultsReady):
+
         try:
             self.add_task("_display_results_and_publish", event)
         except Exception as e:
@@ -53,7 +56,9 @@ class DisplayAgent(QueueWorkerThread):
     def _display_results_and_publish(self, event: FinalResultsReady):
         """Method that displays results and publishes the completion event."""
         self._display_results(event)
-        self.service_bus.publish("DisplayCompleted", DisplayCompleted(), self.__class__.__name__)
+
+        if self.service_bus is not None:
+            self.service_bus.publish("DisplayCompleted", DisplayCompleted(), self.__class__.__name__)
 
     @staticmethod
     def _display_results(event: FinalResultsReady):
@@ -62,6 +67,7 @@ class DisplayAgent(QueueWorkerThread):
 
         logger.info(
             f"\n{WHITE_ON_BLUE}Low capitalization tokens with strong RSI correlation with BTC ({event.weeks} weeks, timeframes: {timeframes_str}):{RESET}"
+
         )
 
         if not results:
@@ -75,4 +81,5 @@ class DisplayAgent(QueueWorkerThread):
                 f"Timeframe: {result.get('timeframe', 'N/A')}, "
                 f"RSI Correlation: {correlation_color}{result['correlation']:.3f}{RESET}, "
                 f"Market Cap: {CYAN}${result['market_cap']:,.0f}{RESET}"
+
             )

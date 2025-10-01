@@ -26,36 +26,48 @@ class AnalysisJob:
     def decrement_counter(self):
         with self._counter_lock:
             self._processing_counter -= 1
-            logger.debug(f"Counter for {self.timeframe}: {self._processing_counter}")
+            logger.info(f"[CORRELATION-DEBUG] Counter for {self.timeframe}: {self._processing_counter}")
+
             if self._processing_counter <= 0:
                 logger.info(
                     f"All RSI for timeframe {self.timeframe} have been processed. Starting correlations."
+
                 )
                 self.start_correlation_analysis()
 
     def start_correlation_analysis(self):
         """Starts correlation analysis for all processed coins in this job."""
+
         try:
             if self.btc_rsi is None:
                 logger.error(f"Cannot start analysis for {self.timeframe}: BTC RSI missing.")
-                self.analyzer.service_bus.publish("AnalysisJobCompleted", {"timeframe": self.timeframe}, self.__class__.__name__)
+
+                if self.analyzer.service_bus is not None:
+                    self.analyzer.service_bus.publish("AnalysisJobCompleted", {"timeframe": self.timeframe}, self.__class__.__name__)
+
                 return
 
             for coin_id, symbol in self.coins_to_process:
                 try:
                     rsi_key = (coin_id, symbol, self.timeframe)
                     coin_rsi = self.analyzer.rsi_results.get(rsi_key)
+
                     if coin_rsi is not None:
                         self.analyzer.analyze_correlation(
                             coin_id_symbol=(coin_id, symbol), coin_rsi=coin_rsi, btc_rsi=self.btc_rsi, timeframe=self.timeframe
+
                         )
                 except Exception as e:
                     logger.error(f"Error analyzing correlation for {coin_id}/{symbol} on {self.timeframe}: {e}", exc_info=True)
                     # Continue with next coin instead of stopping
 
             sqlite_business_logger.log(self.__class__.__name__, f"AnalysisJobCompleted for {self.timeframe}")
-            self.analyzer.service_bus.publish("AnalysisJobCompleted", {"timeframe": self.timeframe}, self.__class__.__name__)
+
+            if self.analyzer.service_bus is not None:
+                self.analyzer.service_bus.publish("AnalysisJobCompleted", {"timeframe": self.timeframe}, self.__class__.__name__)
         except Exception as e:
             logger.error(f"Critical error in correlation analysis for {self.timeframe}: {e}", exc_info=True)
             # Ensure job completion is published even on error to prevent deadlock
-            self.analyzer.service_bus.publish("AnalysisJobCompleted", {"timeframe": self.timeframe}, self.__class__.__name__)
+
+            if self.analyzer.service_bus is not None:
+                self.analyzer.service_bus.publish("AnalysisJobCompleted", {"timeframe": self.timeframe}, self.__class__.__name__)

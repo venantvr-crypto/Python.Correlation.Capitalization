@@ -39,6 +39,7 @@ class DatabaseManager(QueueWorkerThread):
         self.service_bus.subscribe("PrecisionDataFetched", self._handle_precision_data_fetched)
 
     def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
+
         try:
             self.session_guid = event.session_guid
             logger.info(f"DatabaseManager received configuration for session {self.session_guid}.")
@@ -47,6 +48,7 @@ class DatabaseManager(QueueWorkerThread):
             logger.critical(error_msg, exc_info=True)
 
     def _handle_single_coin_fetched(self, event: SingleCoinFetched):
+
         try:
             if event.coin:
                 self.add_task("_db_save_token", event.coin, self.session_guid)
@@ -55,8 +57,10 @@ class DatabaseManager(QueueWorkerThread):
             logger.critical(error_msg, exc_info=True)
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
+
         if not event.prices_df_json:
             return
+
         try:
             prices_df = pd.read_json(StringIO(event.prices_df_json), orient="split")
             prices_df.index = pd.to_datetime(prices_df.index, unit="ms", utc=True)
@@ -67,8 +71,10 @@ class DatabaseManager(QueueWorkerThread):
             logger.error(error_msg)
 
     def _handle_rsi_calculated(self, event: RSICalculated):
+
         if not event.rsi_series_json:
             return
+
         try:
             rsi_series = pd.read_json(StringIO(event.rsi_series_json), orient="split", typ="series")
             rsi_series.index = pd.to_datetime(rsi_series.index, unit="ms", utc=True)
@@ -79,6 +85,7 @@ class DatabaseManager(QueueWorkerThread):
             logger.error(error_msg)
 
     def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):
+
         try:
             result = event.result
             if result:
@@ -90,6 +97,7 @@ class DatabaseManager(QueueWorkerThread):
                     result["low_cap_quartile"],
                     self.session_guid,
                     event.timeframe,
+
                 )
                 self.add_task("_db_save_correlation", *task_args)
         except Exception as e:
@@ -97,6 +105,7 @@ class DatabaseManager(QueueWorkerThread):
             logger.critical(error_msg, exc_info=True)
 
     def _handle_precision_data_fetched(self, event: PrecisionDataFetched):
+
         try:
             if event.precision_data:
                 self.add_task("_db_save_precision_data", event.precision_data, self.session_guid)
@@ -116,6 +125,7 @@ class DatabaseManager(QueueWorkerThread):
         self._close()
 
     def _initialize_tables(self) -> None:
+
         try:
             self.cursor.execute(
                 """
@@ -128,8 +138,10 @@ class DatabaseManager(QueueWorkerThread):
                     max_supply REAL, ath REAL, ath_change_percentage REAL, ath_date TEXT, atl REAL,
                     atl_change_percentage REAL, atl_date TEXT, roi TEXT, last_updated TEXT,
                     PRIMARY KEY (coin_id, session_guid)
+
                 )
                 """
+
             )
             self.cursor.execute(
                 """
@@ -137,16 +149,20 @@ class DatabaseManager(QueueWorkerThread):
                     coin_id TEXT, coin_symbol TEXT, timestamp TIMESTAMP, session_guid TEXT,
                     open REAL, high REAL, low REAL, close REAL, volume REAL, timeframe TEXT,
                     PRIMARY KEY (coin_id, timestamp, session_guid, timeframe)
+
                 )
                 """
+
             )
             self.cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS rsi (
                     coin_id TEXT, coin_symbol TEXT, timestamp TIMESTAMP, session_guid TEXT, rsi REAL, timeframe TEXT,
                     PRIMARY KEY (coin_id, timestamp, session_guid, timeframe)
+
                 )
                 """
+
             )
             self.cursor.execute(
                 """
@@ -154,8 +170,10 @@ class DatabaseManager(QueueWorkerThread):
                     coin_id TEXT, coin_symbol TEXT, run_timestamp TIMESTAMP, session_guid TEXT,
                     correlation REAL, market_cap REAL, low_cap_quartile BOOLEAN, timeframe TEXT,
                     PRIMARY KEY (coin_id, run_timestamp, session_guid, timeframe)
+
                 )
                 """
+
             )
             self.cursor.execute(
                 """
@@ -165,8 +183,10 @@ class DatabaseManager(QueueWorkerThread):
                     min_qty REAL NOT NULL, tick_size REAL NOT NULL, min_notional REAL NOT NULL,
                     session_guid TEXT,
                     PRIMARY KEY (symbol, session_guid)
+
                 )
                 """
+
             )
             self.conn.commit()
         except Exception as e:
@@ -176,6 +196,7 @@ class DatabaseManager(QueueWorkerThread):
             raise
 
     def _db_save_precision_data(self, precision_data: List[Dict], session_guid: str) -> None:
+
         try:
             data_to_insert = [
                 (
@@ -189,16 +210,21 @@ class DatabaseManager(QueueWorkerThread):
                     float(data.get("tick_size", "0")),
                     float(data.get("min_notional", "0")),
                     session_guid,
+
                 )
                 for data in precision_data
+
             ]
             if not data_to_insert:
                 return
+
             sql = """
                 INSERT OR IGNORE INTO precision_data (
                     symbol, quote_asset, base_asset, status, base_asset_precision,
                     step_size, min_qty, tick_size, min_notional, session_guid
+
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+
             """
             self.cursor.executemany(sql, data_to_insert)
             self.conn.commit()
@@ -210,6 +236,7 @@ class DatabaseManager(QueueWorkerThread):
 
     def _db_save_token(self, coin: Dict, session_guid: Optional[str]) -> None:
         coin_id = coin.get('id')
+
         try:
             if not coin_id:
                 error_msg = "Missing 'id' key in token payload."
@@ -249,6 +276,7 @@ class DatabaseManager(QueueWorkerThread):
                 safe_float(coin.get('ath_change_percentage')), safe_str(coin.get('ath_date')),
                 safe_float(coin.get('atl')), safe_float(coin.get('atl_change_percentage')),
                 safe_str(coin.get('atl_date')), safe_str(coin.get('roi')), safe_str(coin.get('last_updated'))
+
             )
             self.cursor.execute('''
                 INSERT OR REPLACE INTO tokens (
@@ -257,8 +285,10 @@ class DatabaseManager(QueueWorkerThread):
                     price_change_percentage_24h, market_cap_change_24h, market_cap_change_percentage_24h,
                     circulating_supply, total_supply, max_supply, ath, ath_change_percentage,
                     ath_date, atl, atl_change_percentage, atl_date, roi, last_updated
+
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+
             ''', values)
             self.conn.commit()
             logger.info(f"Token {coin_id} saved with session_guid={session_guid}.")
@@ -269,19 +299,24 @@ class DatabaseManager(QueueWorkerThread):
 
     def _db_save_prices(self, coin_id_symbol: Tuple[str, str], prices_df: pd.DataFrame, session_guid: Optional[str], timeframe: str) -> None:
         coin_id, coin_symbol = coin_id_symbol
+
         try:
             if prices_df.empty:
                 return
+
             data_to_insert = [
                 (coin_id, coin_symbol, ts.isoformat(), session_guid, row.open, row.high, row.low, row.close, row.volume, timeframe)
                 for ts, row in prices_df.iterrows()
+
             ]
             if not data_to_insert:
                 return
+
             sql = """
                 INSERT OR IGNORE INTO prices
                 (coin_id, coin_symbol, timestamp, session_guid, open, high, low, close, volume, timeframe)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+
             """
             self.cursor.executemany(sql, data_to_insert)
             self.conn.commit()
@@ -293,18 +328,23 @@ class DatabaseManager(QueueWorkerThread):
 
     def _db_save_rsi(self, coin_id_symbol: Tuple[str, str], rsi_series: pd.Series, session_guid: Optional[str], timeframe: str) -> None:
         coin_id, coin_symbol = coin_id_symbol
+
         try:
             if rsi_series.empty:
                 return
+
             data_to_insert = [
                 (coin_id, coin_symbol, ts.to_pydatetime().isoformat(), session_guid, rsi_value, timeframe)
                 for ts, rsi_value in rsi_series.items() if not pd.isna(rsi_value)
+
             ]
             if not data_to_insert:
                 return
+
             sql = """
                 INSERT OR IGNORE INTO rsi (coin_id, coin_symbol, timestamp, session_guid, rsi, timeframe)
                 VALUES (?, ?, ?, ?, ?, ?)
+
             """
             self.cursor.executemany(sql, data_to_insert)
             self.conn.commit()
@@ -316,11 +356,14 @@ class DatabaseManager(QueueWorkerThread):
 
     def _db_save_correlation(self, coin_id_symbol: Tuple[str, str], run_timestamp: str, correlation: float, market_cap: float, low_cap_quartile: bool,
                              session_guid: Optional[str], timeframe: str) -> None:
+
         coin_id, coin_symbol = coin_id_symbol
+
         try:
             self.cursor.execute('''
                 INSERT INTO correlations (coin_id, coin_symbol, run_timestamp, session_guid, correlation, market_cap, low_cap_quartile, timeframe)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+
             ''', (coin_id, coin_symbol, run_timestamp, session_guid, correlation, market_cap, low_cap_quartile, timeframe))
             self.conn.commit()
             logger.info(f"Correlation for {coin_id} saved with session_guid={session_guid}.")
@@ -329,10 +372,30 @@ class DatabaseManager(QueueWorkerThread):
             logger.error(error_msg)
             self.log_message(error_msg)
 
+    def wait_for_queue_completion(self, timeout: float = 30.0) -> bool:
+        """Wait for all tasks in the queue to be processed."""
+        import time
+
+        start_time = time.time()
+
+        while not self.work_queue.empty():
+            if time.time() - start_time > timeout:
+                logger.warning(f"Timeout waiting for DatabaseManager queue to empty. {self.work_queue.qsize()} tasks remaining.")
+                return False
+
+            time.sleep(0.1)
+
+        # Wait a bit more to ensure last task is fully processed
+        time.sleep(0.2)
+        logger.info("DatabaseManager queue is empty. All tasks processed.")
+        return True
+
     def _close(self) -> None:
+
         try:
             if self.conn:
                 self.conn.close()
+                logger.info("Database connection closed.")
         except Exception as e:
             error_msg = f"Error closing database: {e}"
             logger.error(error_msg)

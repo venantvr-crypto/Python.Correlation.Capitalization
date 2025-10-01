@@ -11,3 +11,10 @@ repos:
       - id: check-merge-conflict
       - id: debug-statements
       - id: mixed-line-ending
+  - repo: local
+    hooks:
+      - id: format-blank-lines
+        name: Format blank lines around control structures
+        entry: .pre-commit-hooks/format_blank_lines.py
+        language: script
+        files: \.py$

@@ -17,12 +17,13 @@ if __name__ == "__main__":
         try:
             analysis_config = AnalysisConfig(
                 weeks=50,
-                top_n_coins=100,
+                top_n_coins=1000,
                 correlation_threshold=0.7,
                 rsi_period=14,
                 timeframes=["1h", "1d"],
                 low_cap_percentile=25.0,
                 pubsub_url="http://localhost:5000",
+
             )
             logger.info("Configuration loaded and validated.")
         except ValidationError as e:
