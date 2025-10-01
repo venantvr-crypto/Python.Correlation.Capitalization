@@ -220,7 +220,8 @@ L'architecture est l'un des points forts de ce code. Elle est conçue autour d'u
 * **Découplage Fort** : L'utilisation du `ServiceBus` est excellente. Ajouter un nouveau service (par exemple, un notificateur par email) ne nécessiterait que de créer la
   classe et de l'abonner aux événements pertinents, sans modifier les autres composants.
 * **Concurrence Gérée Proprement** : L'isolation des tâches I/O-bound (réseau, BDD) et CPU-bound (calcul RSI) dans des threads séparés est une bonne pratique. La
-  communication via des files d'attente (`queue.Queue`) est thread-safe.
+  communication via des files d'attente (`queue.Queue`) est thread-safe. Pour plus de détails sur l'architecture threading,
+  consultez [THREADING_AGENTS.md](THREADING_AGENTS.md).
 * **Robustesse** : L'utilisation de `tenacity` pour les appels réseau et la gestion des erreurs (ex: `CoinProcessingFailed`) rendent le script plus résistant aux pannes.
 * **Configuration Centralisée** : `AnalysisConfig` permet de modifier facilement les paramètres de l'analyse sans toucher au code principal.
 * **Persistance des Données** : Tout est sauvegardé dans une base de données SQLite, ce qui permet une analyse post-mortem ou la réutilisation des données.
