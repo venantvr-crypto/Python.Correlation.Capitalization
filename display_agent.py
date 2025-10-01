@@ -42,7 +42,6 @@ class DisplayAgent(QueueWorkerThread):
         except Exception as e:
             error_msg = f"Error handling configuration provided: {e}"
             logger.critical(error_msg, exc_info=True)
-            self.log_message(error_msg)
 
     def _handle_final_results_ready(self, event: FinalResultsReady):
         try:
@@ -50,7 +49,6 @@ class DisplayAgent(QueueWorkerThread):
         except Exception as e:
             error_msg = f"Error handling final results ready: {e}"
             logger.critical(error_msg, exc_info=True)
-            self.log_message(error_msg)
 
     def _display_results_and_publish(self, event: FinalResultsReady):
         """Method that displays results and publishes the completion event."""

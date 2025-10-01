@@ -32,32 +32,31 @@ class RSICalculator(QueueWorkerThread):
         except Exception as e:
             error_msg = f"Error handling configuration provided: {e}"
             logger.critical(error_msg, exc_info=True)
-            self.log_message(error_msg)
 
     def _handle_calculate_rsi_requested(self, event: CalculateRSIRequested):
         try:
-            prices_series = None
-            if event.prices_series_json:
-                try:
-                    prices_series = pd.read_json(StringIO(event.prices_series_json), orient="split", typ="series")
-                    prices_series.index = pd.to_datetime(prices_series.index, unit="ms", utc=True)
-                except Exception as e:
-                    error_msg = f"Cannot reconstruct price Series for {event.coin_id_symbol}: {e}"
-                    logger.error(error_msg)
-                    self.log_message(error_msg)
-
-            # Pass the reconstructed Series (or None) to the calculation task.
+            prices_series = self._deserialize_prices_series(event.prices_series_json, event.coin_id_symbol)
             self.add_task("_calculate_rsi_task", event.coin_id_symbol, prices_series, event.timeframe)
         except Exception as e:
             error_msg = f"Error handling calculate RSI requested: {e}"
             logger.critical(error_msg, exc_info=True)
+
+    def _deserialize_prices_series(self, prices_json: Optional[str], coin_id_symbol: Tuple[str, str]) -> Optional[pd.Series]:
+        if not prices_json:
+            return None
+        try:
+            prices_series = pd.read_json(StringIO(prices_json), orient="split", typ="series")
+            prices_series.index = pd.to_datetime(prices_series.index, unit="ms", utc=True)
+            return prices_series
+        except Exception as e:
+            error_msg = f"Cannot reconstruct price Series for {coin_id_symbol}: {e}"
+            logger.error(error_msg)
             self.log_message(error_msg)
+            return None
 
     def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: Optional[pd.Series], timeframe: str) -> None:
         rsi_series = None
-
         try:
-
             if self.periods is None:
                 error_msg = "RSI period has not been configured. Stopping calculation."
                 logger.error(error_msg)
@@ -87,7 +86,6 @@ class RSICalculator(QueueWorkerThread):
                 )
                 sqlite_business_logger.log(self.__class__.__name__, f"RSICalculated pour {coin_id_symbol}")
                 self.service_bus.publish("RSICalculated", event, self.__class__.__name__)
-
         except Exception as e:
             error_msg = f"Unexpected error calculating RSI for {coin_id_symbol}: {e}"
             logger.error(error_msg, exc_info=True)

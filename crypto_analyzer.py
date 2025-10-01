@@ -183,14 +183,7 @@ class CryptoAnalyzer(OrchestratorBase):
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
         try:
-            prices_df = None
-            if event.prices_df_json:
-                try:
-                    prices_df = pd.read_json(StringIO(event.prices_df_json), orient="split")
-                    prices_df.index = pd.to_datetime(prices_df.index, unit="ms", utc=True)
-                except Exception as e:
-                    error_msg = f"Impossible de reconstruire le DataFrame des prix pour {event.coin_id_symbol}: {e}"
-                    logger.error(error_msg)
+            prices_df = self._deserialize_prices_dataframe(event.prices_df_json, event.coin_id_symbol)
 
             if prices_df is None or prices_df.empty:
                 self.service_bus.publish(
@@ -204,7 +197,6 @@ class CryptoAnalyzer(OrchestratorBase):
             # noinspection PyUnresolvedReferences
             series_json = close_series.to_json(orient="split")
 
-            # On publie la dataclass correspondante avec la chaîne JSON.
             rsi_request_event = CalculateRSIRequested(
                 coin_id_symbol=event.coin_id_symbol, prices_series_json=series_json, timeframe=event.timeframe
             )
@@ -219,23 +211,27 @@ class CryptoAnalyzer(OrchestratorBase):
                 self.__class__.__name__
             )
 
+    # noinspection PyMethodMayBeStatic
+    def _deserialize_prices_dataframe(self, prices_json: Optional[str], coin_id_symbol: Tuple[str, str]) -> Optional[pd.DataFrame]:
+        if not prices_json:
+            return None
+        try:
+            prices_df = pd.read_json(StringIO(prices_json), orient="split")
+            prices_df.index = pd.to_datetime(prices_df.index, unit="ms", utc=True)
+            return prices_df
+        except Exception as e:
+            error_msg = f"Impossible de reconstruire le DataFrame des prix pour {coin_id_symbol}: {e}"
+            logger.error(error_msg)
+            return None
+
     def _handle_rsi_calculated(self, event: RSICalculated):
         try:
             job = self.analysis_jobs.get(event.timeframe)
             if not job:
                 return
 
-            rsi_series = None
-            # NOUVEAU : Bloc de désérialisation
-            if event.rsi_series_json:
-                try:
-                    rsi_series = pd.read_json(StringIO(event.rsi_series_json), orient="split", typ="series")
-                    rsi_series.index = pd.to_datetime(rsi_series.index, unit="ms", utc=True)
-                except Exception as e:
-                    error_msg = f"Impossible de reconstruire la Series RSI pour {event.coin_id_symbol}: {e}"
-                    logger.error(error_msg)
+            rsi_series = self._deserialize_rsi_series(event.rsi_series_json, event.coin_id_symbol)
 
-            # La suite de la logique utilise la Series reconstruite
             if rsi_series is None or rsi_series.empty:
                 self.service_bus.publish(
                     "CoinProcessingFailed",
@@ -259,6 +255,19 @@ class CryptoAnalyzer(OrchestratorBase):
                 {"coin_id_symbol": event.coin_id_symbol, "timeframe": event.timeframe},
                 self.__class__.__name__
             )
+
+    # noinspection PyMethodMayBeStatic
+    def _deserialize_rsi_series(self, rsi_json: Optional[str], coin_id_symbol: Tuple[str, str]) -> Optional[pd.Series]:
+        if not rsi_json:
+            return None
+        try:
+            rsi_series = pd.read_json(StringIO(rsi_json), orient="split", typ="series")
+            rsi_series.index = pd.to_datetime(rsi_series.index, unit="ms", utc=True)
+            return rsi_series
+        except Exception as e:
+            error_msg = f"Impossible de reconstruire la Series RSI pour {coin_id_symbol}: {e}"
+            logger.error(error_msg)
+            return None
 
     def _handle_coin_processing_failed(self, event: CoinProcessingFailed):
         try:

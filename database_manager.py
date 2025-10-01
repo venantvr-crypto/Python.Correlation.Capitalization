@@ -45,7 +45,6 @@ class DatabaseManager(QueueWorkerThread):
         except Exception as e:
             error_msg = f"Error handling configuration provided: {e}"
             logger.critical(error_msg, exc_info=True)
-            self.log_message(error_msg)
 
     def _handle_single_coin_fetched(self, event: SingleCoinFetched):
         try:
@@ -54,45 +53,30 @@ class DatabaseManager(QueueWorkerThread):
         except Exception as e:
             error_msg = f"Error handling single coin fetched: {e}"
             logger.critical(error_msg, exc_info=True)
-            self.log_message(error_msg)
 
     def _handle_historical_prices_fetched(self, event: HistoricalPricesFetched):
+        if not event.prices_df_json:
+            return
         try:
-            if not event.prices_df_json:
-                return
-            try:
-                prices_df = pd.read_json(StringIO(event.prices_df_json), orient="split")
-                prices_df.index = pd.to_datetime(prices_df.index, unit="ms", utc=True)
-            except Exception as e:
-                error_msg = f"Cannot reconstruct price DataFrame for {event.coin_id_symbol}: {e}"
-                logger.error(error_msg)
-                self.log_message(error_msg)
-                return
+            prices_df = pd.read_json(StringIO(event.prices_df_json), orient="split")
+            prices_df.index = pd.to_datetime(prices_df.index, unit="ms", utc=True)
             if prices_df is not None and not prices_df.empty:
                 self.add_task("_db_save_prices", event.coin_id_symbol, prices_df, self.session_guid, event.timeframe)
         except Exception as e:
-            error_msg = f"Error handling historical prices fetched: {e}"
-            logger.critical(error_msg, exc_info=True)
-            self.log_message(error_msg)
+            error_msg = f"Cannot reconstruct price DataFrame for {event.coin_id_symbol}: {e}"
+            logger.error(error_msg)
 
     def _handle_rsi_calculated(self, event: RSICalculated):
+        if not event.rsi_series_json:
+            return
         try:
-            if not event.rsi_series_json:
-                return
-            try:
-                rsi_series = pd.read_json(StringIO(event.rsi_series_json), orient="split", typ="series")
-                rsi_series.index = pd.to_datetime(rsi_series.index, unit="ms", utc=True)
-            except Exception as e:
-                error_msg = f"Cannot reconstruct RSI Series for database for {event.coin_id_symbol}: {e}"
-                logger.error(error_msg)
-                self.log_message(error_msg)
-                return
+            rsi_series = pd.read_json(StringIO(event.rsi_series_json), orient="split", typ="series")
+            rsi_series.index = pd.to_datetime(rsi_series.index, unit="ms", utc=True)
             if rsi_series is not None and not rsi_series.empty:
                 self.add_task("_db_save_rsi", event.coin_id_symbol, rsi_series, self.session_guid, event.timeframe)
         except Exception as e:
-            error_msg = f"Error handling RSI calculated: {e}"
-            logger.critical(error_msg, exc_info=True)
-            self.log_message(error_msg)
+            error_msg = f"Cannot reconstruct RSI Series for database for {event.coin_id_symbol}: {e}"
+            logger.error(error_msg)
 
     def _handle_correlation_analyzed(self, event: CorrelationAnalyzed):
         try:
@@ -111,7 +95,6 @@ class DatabaseManager(QueueWorkerThread):
         except Exception as e:
             error_msg = f"Error handling correlation analyzed: {e}"
             logger.critical(error_msg, exc_info=True)
-            self.log_message(error_msg)
 
     def _handle_precision_data_fetched(self, event: PrecisionDataFetched):
         try:
@@ -120,7 +103,6 @@ class DatabaseManager(QueueWorkerThread):
         except Exception as e:
             error_msg = f"Error handling precision data fetched: {e}"
             logger.critical(error_msg, exc_info=True)
-            self.log_message(error_msg)
 
     def run(self):
         self.conn = sqlite3.connect(self.db_name, check_same_thread=False)

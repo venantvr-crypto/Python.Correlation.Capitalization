@@ -62,9 +62,7 @@ class DataFetcher(QueueWorkerThread):
         def fetch_one_page(page_num: int) -> List[dict]:
             logger.info(f"Fetching page {page_num}/{pages} from CoinGecko...")
             return self.cg.get_coins_markets(vs_currency="usd", per_page=100, page=page_num, timeout=30)
-
         try:
-
             for page in range(1, pages + 1):
                 try:
                     new_coins = fetch_one_page(page)
@@ -80,9 +78,7 @@ class DataFetcher(QueueWorkerThread):
                     break
 
             logger.info(f"CoinGecko fetch completed. {len(coins)} coins found.")
-
             self.service_bus.publish("TopCoinsFetched", TopCoinsFetched(coins=coins[:n]), self.__class__.__name__)
-
         except Exception as e:
             error_msg = f"Failed to fetch precision data from Binance: {e}"
             logger.error(error_msg)
@@ -99,13 +95,10 @@ class DataFetcher(QueueWorkerThread):
     def _fetch_historical_prices_task(self, coin_id_symbol: Tuple[str, str], weeks: int, timeframe: str) -> None:
         coin_id, coin_symbol = coin_id_symbol
         symbol = f"{coin_symbol.upper()}/USDC"
-
         logger.info(f"Fetching prices for {symbol} on timeframe {timeframe}...")
-
         prices_df = None
 
         try:
-
             if not self.binance.markets:
                 self.binance.load_markets()
 
@@ -126,7 +119,6 @@ class DataFetcher(QueueWorkerThread):
             )
             sqlite_business_logger.log(self.__class__.__name__, f"HistoricalPricesFetched pour {coin_id_symbol}")
             self.service_bus.publish("HistoricalPricesFetched", event_payload, self.__class__.__name__)
-
         except Exception as e:
             error_msg = f"Final failure fetching prices for {symbol}: {e}"
             logger.error(error_msg)
@@ -142,9 +134,7 @@ class DataFetcher(QueueWorkerThread):
     )
     def _fetch_precision_data_task(self) -> None:
         precision_data = []
-
         try:
-
             logger.info("Fetching precision data from all Binance markets...")
             markets = self.binance.load_markets()
             for market_info in markets.values():
@@ -187,13 +177,10 @@ class DataFetcher(QueueWorkerThread):
                             "min_notional": notional_filter.get("minNotional"),
                         }
                         precision_data.append(data)
-
             logger.info(f"{len(precision_data)} active markets found on Binance.")
-
             length = len(precision_data)
             sqlite_business_logger.log(self.__class__.__name__, f"PrecisionDataFetched pour {length} paires")
             self.service_bus.publish("PrecisionDataFetched", PrecisionDataFetched(precision_data=precision_data), self.__class__.__name__)
-
         except Exception as e:
             error_msg = f"Failed to fetch precision data from Binance: {e}"
             logger.error(error_msg)
@@ -206,7 +193,6 @@ class DataFetcher(QueueWorkerThread):
         except Exception as e:
             error_msg = f"Error handling configuration provided: {e}"
             logger.critical(error_msg, exc_info=True)
-            self.log_message(error_msg)
 
     def _handle_fetch_top_coins_requested(self, event: FetchTopCoinsRequested):
         try:
@@ -214,7 +200,6 @@ class DataFetcher(QueueWorkerThread):
         except Exception as e:
             error_msg = f"Error handling fetch top coins requested: {e}"
             logger.critical(error_msg, exc_info=True)
-            self.log_message(error_msg)
 
     def _handle_fetch_historical_prices_requested(self, event: FetchHistoricalPricesRequested):
         try:
@@ -222,7 +207,6 @@ class DataFetcher(QueueWorkerThread):
         except Exception as e:
             error_msg = f"Error handling fetch historical prices requested: {e}"
             logger.critical(error_msg, exc_info=True)
-            self.log_message(error_msg)
 
     def _handle_fetch_precision_data_requested(self, _event: FetchPrecisionDataRequested):
         try:
@@ -230,4 +214,3 @@ class DataFetcher(QueueWorkerThread):
         except Exception as e:
             error_msg = f"Error handling fetch precision data requested: {e}"
             logger.critical(error_msg, exc_info=True)
-            self.log_message(error_msg)
