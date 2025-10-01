@@ -56,17 +56,18 @@ class RSICalculator(QueueWorkerThread):
     def _calculate_rsi_task(self, coin_id_symbol: Tuple[str, str], data: Optional[pd.Series], timeframe: str) -> None:
         rsi_series = None
 
-        if self.periods is None:
-            error_msg = "RSI period has not been configured. Stopping calculation."
-            logger.error(error_msg)
-            self.log_message(error_msg)
-        elif data is None or data.empty or len(data.dropna()) < self.periods + 1:
-            logger.warning(
-                f"Skipping RSI calculation for {coin_id_symbol} ({timeframe}): "
-                f"insufficient or invalid data."
-            )
-        else:
-            try:
+        try:
+
+            if self.periods is None:
+                error_msg = "RSI period has not been configured. Stopping calculation."
+                logger.error(error_msg)
+                self.log_message(error_msg)
+            elif data is None or data.empty or len(data.dropna()) < self.periods + 1:
+                logger.warning(
+                    f"Skipping RSI calculation for {coin_id_symbol} ({timeframe}): "
+                    f"insufficient or invalid data."
+                )
+            else:
                 valid_data = data.dropna().astype(float)
                 delta = valid_data.diff()
                 gain = (delta.where(delta > 0, 0)).rolling(window=self.periods).mean()
@@ -76,18 +77,19 @@ class RSICalculator(QueueWorkerThread):
                 rsi_series = 100 - (100 / (1 + rs))
                 rsi_series[rs == np.inf] = 100
                 rsi_series = rsi_series.dropna()
-            except Exception as e:
-                error_msg = f"Unexpected error calculating RSI for {coin_id_symbol}: {e}"
-                logger.error(error_msg, exc_info=True)
-                self.log_message(error_msg)
-                rsi_series = None  # Ensure the result is None in case of failure
 
-        if self.service_bus:
-            rsi_json = rsi_series.to_json(orient="split") if rsi_series is not None and not rsi_series.empty else None
-            event = RSICalculated(
-                coin_id_symbol=coin_id_symbol,
-                rsi_series_json=rsi_json,
-                timeframe=timeframe
-            )
-            sqlite_business_logger.log(self.__class__.__name__, f"RSICalculated pour {coin_id_symbol}")
-            self.service_bus.publish("RSICalculated", event, self.__class__.__name__)
+            if rsi_series is not None and not rsi_series.empty:
+                rsi_json = rsi_series.to_json(orient="split")
+                event = RSICalculated(
+                    coin_id_symbol=coin_id_symbol,
+                    rsi_series_json=rsi_json,
+                    timeframe=timeframe
+                )
+                sqlite_business_logger.log(self.__class__.__name__, f"RSICalculated pour {coin_id_symbol}")
+                self.service_bus.publish("RSICalculated", event, self.__class__.__name__)
+
+        except Exception as e:
+            error_msg = f"Unexpected error calculating RSI for {coin_id_symbol}: {e}"
+            logger.error(error_msg, exc_info=True)
+            self.log_message(error_msg)
+            # rsi_series = None  # Ensure the result is None in case of failure

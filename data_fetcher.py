@@ -63,23 +63,30 @@ class DataFetcher(QueueWorkerThread):
             logger.info(f"Fetching page {page_num}/{pages} from CoinGecko...")
             return self.cg.get_coins_markets(vs_currency="usd", per_page=100, page=page_num, timeout=30)
 
-        for page in range(1, pages + 1):
-            try:
-                new_coins = fetch_one_page(page)
-                if not new_coins:
-                    logger.warning(f"Page {page} from CoinGecko returned no data, stopping collection.")
-                    break
-                coins.extend(new_coins)
-            except requests.exceptions.RequestException as e:
-                error_msg = f"Final failure fetching page {page} after multiple attempts: {e}"
-                logger.error(error_msg)
-                self.log_message(error_msg)
-                logger.warning("Stopping top coins collection due to persistent network error.")
-                break
+        try:
 
-        logger.info(f"CoinGecko fetch completed. {len(coins)} coins found.")
-        if self.service_bus:
+            for page in range(1, pages + 1):
+                try:
+                    new_coins = fetch_one_page(page)
+                    if not new_coins:
+                        logger.warning(f"Page {page} from CoinGecko returned no data, stopping collection.")
+                        break
+                    coins.extend(new_coins)
+                except requests.exceptions.RequestException as e:
+                    error_msg = f"Final failure fetching page {page} after multiple attempts: {e}"
+                    logger.error(error_msg)
+                    self.log_message(error_msg)
+                    logger.warning("Stopping top coins collection due to persistent network error.")
+                    break
+
+            logger.info(f"CoinGecko fetch completed. {len(coins)} coins found.")
+
             self.service_bus.publish("TopCoinsFetched", TopCoinsFetched(coins=coins[:n]), self.__class__.__name__)
+
+        except Exception as e:
+            error_msg = f"Failed to fetch precision data from Binance: {e}"
+            logger.error(error_msg)
+            self.log_message(error_msg)
 
     @retry(
         stop=stop_after_attempt(3),
@@ -96,7 +103,9 @@ class DataFetcher(QueueWorkerThread):
         logger.info(f"Fetching prices for {symbol} on timeframe {timeframe}...")
 
         prices_df = None
+
         try:
+
             if not self.binance.markets:
                 self.binance.load_markets()
 
@@ -110,18 +119,18 @@ class DataFetcher(QueueWorkerThread):
                     )
                     prices_df["timestamp"] = pd.to_datetime(prices_df["timestamp"], unit="ms", utc=True)
                     prices_df.set_index("timestamp", inplace=True)
-        except Exception as e:
-            error_msg = f"Final failure fetching prices for {symbol}: {e}"
-            logger.error(error_msg)
-            self.log_message(error_msg)
 
-        if self.service_bus:
             prices_json = prices_df.to_json(orient="split") if prices_df is not None else None
             event_payload = HistoricalPricesFetched(
                 coin_id_symbol=coin_id_symbol, prices_df_json=prices_json, timeframe=timeframe
             )
             sqlite_business_logger.log(self.__class__.__name__, f"HistoricalPricesFetched pour {coin_id_symbol}")
             self.service_bus.publish("HistoricalPricesFetched", event_payload, self.__class__.__name__)
+
+        except Exception as e:
+            error_msg = f"Final failure fetching prices for {symbol}: {e}"
+            logger.error(error_msg)
+            self.log_message(error_msg)
 
     @retry(
         stop=stop_after_attempt(3),
@@ -133,7 +142,9 @@ class DataFetcher(QueueWorkerThread):
     )
     def _fetch_precision_data_task(self) -> None:
         precision_data = []
+
         try:
+
             logger.info("Fetching precision data from all Binance markets...")
             markets = self.binance.load_markets()
             for market_info in markets.values():
@@ -176,16 +187,17 @@ class DataFetcher(QueueWorkerThread):
                             "min_notional": notional_filter.get("minNotional"),
                         }
                         precision_data.append(data)
+
             logger.info(f"{len(precision_data)} active markets found on Binance.")
+
+            length = len(precision_data)
+            sqlite_business_logger.log(self.__class__.__name__, f"PrecisionDataFetched pour {length} paires")
+            self.service_bus.publish("PrecisionDataFetched", PrecisionDataFetched(precision_data=precision_data), self.__class__.__name__)
+
         except Exception as e:
             error_msg = f"Failed to fetch precision data from Binance: {e}"
             logger.error(error_msg)
             self.log_message(error_msg)
-
-        if self.service_bus:
-            length = len(precision_data)
-            sqlite_business_logger.log(self.__class__.__name__, f"PrecisionDataFetched pour {length} paires")
-            self.service_bus.publish("PrecisionDataFetched", PrecisionDataFetched(precision_data=precision_data), self.__class__.__name__)
 
     def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
         try:
