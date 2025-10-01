@@ -12,7 +12,6 @@ def needs_blank_line_before(line: str) -> bool:
         stripped.startswith(keyword)
 
         for keyword in ["if ", "for ", "while ", "try:"]
-
     )
 
 
@@ -23,7 +22,6 @@ def is_control_structure_start(line: str) -> bool:
         stripped.startswith(keyword)
 
         for keyword in ["if ", "elif ", "else:", "try:", "except ", "except:", "finally:", "for ", "while ", "with "]
-
     )
 
 
@@ -59,27 +57,8 @@ def format_file(filepath: Path) -> bool:
 
         new_lines.append(line)
 
-        # Add blank line after blocks that end (indentation decreases)
-
-        if i + 1 < len(lines):
-            next_line = lines[i + 1]
-            next_stripped = next_line.strip()
-
-            if not next_stripped:  # Next line is already blank
-                continue
-
-            next_indent = len(next_line) - len(next_line.lstrip())
-
-            # Indentation decreased and not a continuation of control structure
-            if (
-                next_indent < current_indent
-                and not is_control_structure_start(next_line)
-                and not line.rstrip().endswith("\\")
-                and current_indent > 4  # Only for blocks inside methods
-
-            ):
-                new_lines.append("\n")
-                modified = True
+        # >>> Le bloc de code qui ajoutait une ligne vide après une
+        # >>> diminution d'indentation a été supprimé ici.
 
     if modified:
         new_content = "".join(new_lines)
