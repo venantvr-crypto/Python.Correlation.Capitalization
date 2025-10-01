@@ -2,6 +2,8 @@ import threading
 from typing import List, Optional, Tuple
 
 import pandas as pd
+# noinspection PyPackageRequirements
+from pubsub import IdempotencyTracker
 from threadsafe_logger import sqlite_business_logger
 
 from logger import logger
@@ -17,21 +19,45 @@ class AnalysisJob:
         self.coins_to_process: List[Tuple[str, str]] = []
         self._processing_counter = 0
         self._counter_lock = threading.Lock()
+        self._idempotency_tracker = IdempotencyTracker(maxlen=1000)
 
     def set_coins_to_process(self, coins: List[Tuple[str, str]]):
         self.coins_to_process = [c for c in coins if c[1].lower() != "btc"]
         with self._counter_lock:
             self._processing_counter = len(self.coins_to_process) + 1
 
-    def decrement_counter(self):
+    def decrement_counter(self, coin_id_symbol: Optional[Tuple[str, str]] = None):
+        """
+        Decrement the processing counter for this job.
+
+        Args:
+            coin_id_symbol: Optional coin identifier for idempotency tracking
+        """
+        # Create event data for idempotency check
+        event_data = {
+            "timeframe": self.timeframe,
+            "coin_id_symbol": coin_id_symbol,
+            "event_type": "decrement"
+        }
+
+        # Check if we've already processed this decrement
+
+        if self._idempotency_tracker.is_duplicate(event_data):
+            logger.debug(
+                f"[IDEMPOTENCY] Duplicate decrement detected for {coin_id_symbol} on {self.timeframe}. Skipping."
+            )
+            return
+
+        # Mark as processed and proceed with decrement
+        self._idempotency_tracker.mark_processed(event_data)
+
         with self._counter_lock:
             self._processing_counter -= 1
-            logger.info(f"[CORRELATION-DEBUG] Counter for {self.timeframe}: {self._processing_counter}")
+            logger.debug(f"[CORRELATION-DEBUG] Counter for {self.timeframe}: {self._processing_counter}")
 
             if self._processing_counter <= 0:
                 logger.info(
                     f"All RSI for timeframe {self.timeframe} have been processed. Starting correlations."
-
                 )
                 self.start_correlation_analysis()
 
@@ -55,7 +81,6 @@ class AnalysisJob:
                     if coin_rsi is not None:
                         self.analyzer.analyze_correlation(
                             coin_id_symbol=(coin_id, symbol), coin_rsi=coin_rsi, btc_rsi=self.btc_rsi, timeframe=self.timeframe
-
                         )
                 except Exception as e:
                     logger.error(f"Error analyzing correlation for {coin_id}/{symbol} on {self.timeframe}: {e}", exc_info=True)

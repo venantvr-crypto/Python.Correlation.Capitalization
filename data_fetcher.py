@@ -34,9 +34,7 @@ class DataFetcher(QueueWorkerThread):
             {
                 "enableRateLimit": True,
                 "timeout": 30000,  # 30 seconds in milliseconds
-
             }
-
         )
 
         self.session_guid: Optional[str] = None
@@ -59,9 +57,7 @@ class DataFetcher(QueueWorkerThread):
             retry=retry_if_exception_type(requests.exceptions.RequestException),
             before_sleep=lambda retry_state: logger.warning(
                 f"Network error with CoinGecko. Retrying page in {int(retry_state.next_action.sleep)}s... (Attempt {retry_state.attempt_number})"
-
             ),
-
         )
         def fetch_one_page(page_num: int) -> List[dict]:
             logger.info(f"Fetching page {page_num}/{pages} from CoinGecko...")
@@ -98,9 +94,7 @@ class DataFetcher(QueueWorkerThread):
         retry=retry_if_exception_type(ccxt.NetworkError),
         before_sleep=lambda rs: logger.warning(
             f"Network error on Binance for {rs.args[0][1]}. Retrying in {int(rs.next_action.sleep)}s..."
-
         ),
-
     )
     def _fetch_historical_prices_task(self, coin_id_symbol: Tuple[str, str], weeks: int, timeframe: str) -> None:
         coin_id, coin_symbol = coin_id_symbol
@@ -119,7 +113,6 @@ class DataFetcher(QueueWorkerThread):
                 if ohlcv:
                     prices_df = pd.DataFrame(
                         ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"]
-
                     )
                     prices_df["timestamp"] = pd.to_datetime(prices_df["timestamp"], unit="ms", utc=True)
                     prices_df.set_index("timestamp", inplace=True)
@@ -127,7 +120,6 @@ class DataFetcher(QueueWorkerThread):
             prices_json = prices_df.to_json(orient="split") if prices_df is not None else None
             event_payload = HistoricalPricesFetched(
                 coin_id_symbol=coin_id_symbol, prices_df_json=prices_json, timeframe=timeframe
-
             )
             sqlite_business_logger.log(self.__class__.__name__, f"HistoricalPricesFetched pour {coin_id_symbol}")
 
@@ -146,7 +138,6 @@ class DataFetcher(QueueWorkerThread):
                     "CoinProcessingFailed",
                     CoinProcessingFailed(coin_id_symbol=coin_id_symbol, timeframe=timeframe),
                     self.__class__.__name__
-
                 )
 
     @retry(
@@ -155,9 +146,7 @@ class DataFetcher(QueueWorkerThread):
         retry=retry_if_exception_type(ccxt.NetworkError),
         before_sleep=lambda rs: logger.warning(
             f"Network error on Binance. Retrying in {int(rs.next_action.sleep)}s..."
-
         ),
-
     )
     def _fetch_precision_data_task(self) -> None:
         precision_data = []
@@ -172,30 +161,24 @@ class DataFetcher(QueueWorkerThread):
                             f
                             for f in market_info.get("info", {}).get("filters", [])
                             if f.get("filterType") == "LOT_SIZE"
-
                         ),
                         None,
-
                     )
                     price_filter = next(
                         (
                             f
                             for f in market_info.get("info", {}).get("filters", [])
                             if f.get("filterType") == "PRICE_FILTER"
-
                         ),
                         None,
-
                     )
                     notional_filter = next(
                         (
                             f
                             for f in market_info.get("info", {}).get("filters", [])
                             if f.get("filterType") == "NOTIONAL"
-
                         ),
                         None,
-
                     )
 
                     if lot_size_filter and price_filter and notional_filter:
@@ -209,7 +192,6 @@ class DataFetcher(QueueWorkerThread):
                             "min_qty": lot_size_filter.get("minQty"),
                             "tick_size": price_filter.get("tickSize"),
                             "min_notional": notional_filter.get("minNotional"),
-
                         }
                         precision_data.append(data)
 
@@ -236,7 +218,6 @@ class DataFetcher(QueueWorkerThread):
     def _handle_fetch_top_coins_requested(self, event: FetchTopCoinsRequested):
 
         try:
-            logger.info(f"[DEBUG] Received request to fetch {event.n} coins")
             self.add_task("_fetch_top_coins_task", event.n)
         except Exception as e:
             error_msg = f"Error handling fetch top coins requested: {e}"
