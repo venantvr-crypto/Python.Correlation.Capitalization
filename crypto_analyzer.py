@@ -7,11 +7,12 @@ import pandas as pd
 from python_pubsub_client import OrchestratorBase, ServiceBus, AllProcessingCompleted, WorkerFailed
 from python_threadsafe_logger import sqlite_business_logger
 
-from analysis_job import AnalysisJob
-from configuration import AnalysisConfig
 from agents.data_fetcher import DataFetcher
 from agents.database_manager import DatabaseManager
 from agents.display_agent import DisplayAgent
+from agents.rsi_calculator import RSICalculator
+from analysis_job import AnalysisJob
+from configuration import AnalysisConfig
 from events import (
     AnalysisConfigurationProvided,
     AnalysisJobCompleted,
@@ -27,7 +28,6 @@ from events import (
     TopCoinsFetched,
 )
 from logger import logger
-from agents.rsi_calculator import RSICalculator
 
 
 class CryptoAnalyzer(OrchestratorBase):

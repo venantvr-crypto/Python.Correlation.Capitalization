@@ -4,11 +4,11 @@ from typing import List, Optional, Tuple
 import ccxt
 import pandas as pd
 import requests
+from pycoingecko import CoinGeckoAPI
 # noinspection PyPackageRequirements
 from python_pubsub_client import QueueWorkerThread, ServiceBus
-from pycoingecko import CoinGeckoAPI
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 from python_threadsafe_logger import sqlite_business_logger
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from events import (
     AnalysisConfigurationProvided,

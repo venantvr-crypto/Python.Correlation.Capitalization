@@ -4,7 +4,8 @@ Ce document explique les subtilités de l'architecture multi-threadée de l'appl
 
 ## Vue d'Ensemble de l'Architecture Threading
 
-L'application utilise une architecture événementielle basée sur des threads multiples qui communiquent via un **ServiceBus**. Cette approche découple les composants et permet un traitement parallèle efficace.
+L'application utilise une architecture événementielle basée sur des threads multiples qui communiquent via un **ServiceBus**. Cette approche découple les composants et
+permet un traitement parallèle efficace.
 
 ### Composants Principaux
 
@@ -13,11 +14,11 @@ L'application s'articule autour de plusieurs threads qui s'exécutent en parall�
 1. **Thread Principal** : Orchestrateur (CryptoAnalyzer) qui coordonne le workflow et maintient l'état global
 2. **ServiceBus Thread** : Gestionnaire central des événements qui reçoit et distribue tous les messages
 3. **Worker Threads** : Agents spécialisés qui traitent les tâches en parallèle
-   - **DataFetcher** : Récupère les données depuis les APIs externes (CoinGecko, Binance)
-   - **RSICalculator** : Effectue les calculs mathématiques du RSI
-   - **DatabaseManager** : Gère toutes les interactions avec SQLite
-   - **DisplayAgent** : Affiche les résultats finaux
-   - **StatusServer** : Serveur HTTP optionnel pour monitorer l'état des workers
+    - **DataFetcher** : Récupère les données depuis les APIs externes (CoinGecko, Binance)
+    - **RSICalculator** : Effectue les calculs mathématiques du RSI
+    - **DatabaseManager** : Gère toutes les interactions avec SQLite
+    - **DisplayAgent** : Affiche les résultats finaux
+    - **StatusServer** : Serveur HTTP optionnel pour monitorer l'état des workers
 
 Tous ces threads communiquent exclusivement via le ServiceBus, sans jamais s'appeler directement.
 
@@ -37,6 +38,7 @@ class QueueWorkerThread(threading.Thread):
 ```
 
 **Avantages de cette approche :**
+
 - **Découplage** : Les producteurs (qui ajoutent des tâches) ne bloquent jamais
 - **Thread-safe** : `queue.Queue` gère automatiquement la synchronisation
 - **Backpressure naturel** : Si un agent est surchargé, sa queue s'allonge mais n'impacte pas les autres
@@ -66,6 +68,7 @@ def run(self):
 ```
 
 **Points clés :**
+
 - `timeout=1` : Permet de vérifier régulièrement `_running` sans bloquer indéfiniment
 - `task_done()` : Essentiel pour synchroniser avec `queue.join()` si utilisé
 - Gestion d'erreur : Les exceptions ne tuent pas le thread
@@ -80,6 +83,7 @@ def add_task(self, method_name: str, *args, **kwargs):
 ```
 
 **Exemple d'utilisation dans DataFetcher :**
+
 ```python
 def _handle_fetch_top_coins_requested(self, event):
     # Cette méthode est appelée par le ServiceBus
@@ -92,6 +96,7 @@ def _handle_fetch_top_coins_requested(self, event):
 ### Rôle du ServiceBus
 
 Le `ServiceBus` est lui-même un thread qui :
+
 1. Reçoit les événements publiés par les composants
 2. Sérialise/désérialise les payloads (dataclasses → dict → dataclasses)
 3. Distribue les événements aux handlers abonnés
@@ -107,6 +112,7 @@ class ServiceBusBase(threading.Thread):
 ### Pattern Pub/Sub et Thread-Safety
 
 **Abonnement à un événement :**
+
 ```python
 def subscribe(self, event_name: str, subscriber: Callable):
     self._topics.add(event_name)
@@ -115,6 +121,7 @@ def subscribe(self, event_name: str, subscriber: Callable):
 ```
 
 **Publication d'un événement :**
+
 ```python
 def publish(self, event_name: str, payload: Any, producer_name: str):
     message = self._prepare_payload(payload, event_name)
@@ -131,19 +138,23 @@ def publish(self, event_name: str, payload: Any, producer_name: str):
 Le flux de communication suit toujours le même pattern en 4 étapes :
 
 **Étape 1 : Publication d'un événement**
+
 - Un worker (ex: DataFetcher) termine une tâche et publie un événement
 - Appel à `service_bus.publish("TopCoinsFetched", payload, producer_name)`
 
 **Étape 2 : Réception par le ServiceBus**
+
 - Le ServiceBus reçoit l'événement dans son thread dédié
 - Sérialise le payload (dataclass → dict)
 - Recherche tous les handlers abonnés à cet événement
 
 **Étape 3 : Invocation des handlers**
+
 - Le ServiceBus appelle chaque handler abonné (ex: `CryptoAnalyzer._handle_top_coins_fetched()`)
 - **Important** : Les handlers s'exécutent dans le thread du ServiceBus, ils doivent être rapides
 
 **Étape 4 : Délégation aux workers**
+
 - Le handler ajoute une tâche à la queue d'un worker via `add_task()`
 - Le worker traite la tâche dans son propre thread, de manière asynchrone
 
@@ -155,6 +166,7 @@ Le flux de communication suit toujours le même pattern en 4 étapes :
 
 ```python
 class DataFetcher(QueueWorkerThread):
+
     def __init__(self, service_bus):
         super().__init__(service_bus=service_bus, name="DataFetcher")
         self.cg = CoinGeckoAPI()
@@ -162,6 +174,7 @@ class DataFetcher(QueueWorkerThread):
 ```
 
 **Gestion des erreurs réseau avec retry :**
+
 ```python
 @retry(
     stop=stop_after_attempt(4),
@@ -180,6 +193,7 @@ def fetch_one_page(page_num: int) -> List[dict]:
 
 ```python
 class RSICalculator(QueueWorkerThread):
+
     def _calculate_rsi_task(self, coin_id_symbol, data, timeframe):
         # Calculs pandas/numpy intensifs
         delta = valid_data.diff()
@@ -220,6 +234,7 @@ class DatabaseManager(QueueWorkerThread):
 ```
 
 **Pattern de synchronisation** :
+
 - `_initialized_event` : Permet aux autres composants d'attendre que la DB soit prête
 - Toutes les opérations SQL se font dans le thread du DatabaseManager
 - Évite les problèmes de concurrence avec SQLite
@@ -281,6 +296,7 @@ def stop(self, timeout: Optional[float] = 30):
 
 ```python
 class CryptoAnalyzer:
+
     def __init__(self):
         self._processing_completed = threading.Event()
 
@@ -330,6 +346,7 @@ def get_status(self) -> dict:
 ```
 
 **Solutions possibles** :
+
 - Ajouter des threads supplémentaires pour l'agent surchargé
 - Implémenter une limite de taille de queue avec blocage
 - Ajuster les priorités de traitement
@@ -424,6 +441,7 @@ class Agent:
 Voici une séquence typique d'exécution pour analyser une cryptomonnaie :
 
 **Phase 1 : Récupération des données de marché**
+
 1. CryptoAnalyzer publie `FetchTopCoinsRequested` sur le ServiceBus
 2. ServiceBus notifie DataFetcher via son handler `_handle_fetch_top_coins_requested`
 3. DataFetcher ajoute la tâche `_fetch_top_coins_task` à sa queue
@@ -432,6 +450,7 @@ Voici une séquence typique d'exécution pour analyser une cryptomonnaie :
 6. ServiceBus notifie CryptoAnalyzer qui traite la liste des cryptos
 
 **Phase 2 : Récupération des prix historiques**
+
 7. CryptoAnalyzer publie `FetchHistoricalPricesRequested` pour chaque crypto et timeframe
 8. DataFetcher récupère les données OHLCV depuis Binance
 9. DataFetcher publie `HistoricalPricesFetched` avec les données JSON sérialisées
@@ -440,6 +459,7 @@ Voici une séquence typique d'exécution pour analyser une cryptomonnaie :
     - DatabaseManager pour sauvegarder les prix (via `_db_save_prices`)
 
 **Phase 3 : Calcul du RSI**
+
 11. CryptoAnalyzer publie `CalculateRSIRequested` avec les prix
 12. RSICalculator reçoit l'événement et ajoute `_calculate_rsi_task` à sa queue
 13. RSICalculator effectue les calculs pandas/numpy dans son thread
@@ -449,6 +469,7 @@ Voici une séquence typique d'exécution pour analyser une cryptomonnaie :
     - DatabaseManager pour sauvegarder les RSI (via `_db_save_rsi`)
 
 **Phase 4 : Analyse et affichage**
+
 16. CryptoAnalyzer calcule les corrélations et publie `CorrelationAnalyzed`
 17. DatabaseManager sauvegarde les corrélations dans SQLite
 18. Quand tous les timeframes sont terminés, CryptoAnalyzer publie `FinalResultsReady`
@@ -464,4 +485,5 @@ L'architecture multi-threadée de cette application offre :
 - **Modularité** : Ajout/suppression de workers sans impact sur les autres
 - **Clarté** : Communication explicite via événements typés
 
-Le pattern QueueWorkerThread + ServiceBus est un excellent choix pour des applications événementielles nécessitant du traitement asynchrone distribué sur plusieurs workers.
+Le pattern QueueWorkerThread + ServiceBus est un excellent choix pour des applications événementielles nécessitant du traitement asynchrone distribué sur plusieurs
+workers.

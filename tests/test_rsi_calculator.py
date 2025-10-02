@@ -4,8 +4,8 @@ import pandas as pd
 # noinspection PyPackageRequirements
 import pytest
 
-from events import AnalysisConfigurationProvided, RSICalculated, CalculateRSIRequested
 from agents.rsi_calculator import RSICalculator
+from events import AnalysisConfigurationProvided, RSICalculated, CalculateRSIRequested
 
 
 # On utilise la fixture partagée de conftest.py
