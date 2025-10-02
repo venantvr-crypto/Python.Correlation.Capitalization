@@ -1,7 +1,7 @@
 from typing import Optional
 
 # noinspection PyPackageRequirements
-from pubsub import QueueWorkerThread, ServiceBus
+from python_pubsub_client import QueueWorkerThread, ServiceBus
 
 from events import AnalysisConfigurationProvided, DisplayCompleted, FinalResultsReady
 from logger import logger
@@ -39,7 +39,6 @@ class DisplayAgent(QueueWorkerThread):
             self.session_guid = event.session_guid
             logger.info(
                 f"{BLACK_ON_YELLOW}DisplayAgent{RESET} received configuration for session {BOLD_WHITE}{self.session_guid}{RESET}."
-
             )
         except Exception as e:
             error_msg = f"Error handling configuration provided: {e}"
@@ -67,7 +66,6 @@ class DisplayAgent(QueueWorkerThread):
 
         logger.info(
             f"\n{WHITE_ON_BLUE}Low capitalization tokens with strong RSI correlation with BTC ({event.weeks} weeks, timeframes: {timeframes_str}):{RESET}"
-
         )
 
         if not results:
@@ -81,5 +79,4 @@ class DisplayAgent(QueueWorkerThread):
                 f"Timeframe: {result.get('timeframe', 'N/A')}, "
                 f"RSI Correlation: {correlation_color}{result['correlation']:.3f}{RESET}, "
                 f"Market Cap: {CYAN}${result['market_cap']:,.0f}{RESET}"
-
             )

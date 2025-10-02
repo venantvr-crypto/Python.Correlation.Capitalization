@@ -3,8 +3,8 @@ from typing import List, Optional, Tuple
 
 import pandas as pd
 # noinspection PyPackageRequirements
-from pubsub import IdempotencyTracker
-from threadsafe_logger import sqlite_business_logger
+from python_pubsub_client import IdempotencyTracker
+from async_threadsafe_logger import sqlite_business_logger
 
 from logger import logger
 

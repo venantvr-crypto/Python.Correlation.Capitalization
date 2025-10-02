@@ -4,8 +4,8 @@ from typing import Optional, Tuple
 import numpy as np
 import pandas as pd
 # noinspection PyPackageRequirements
-from pubsub import QueueWorkerThread, ServiceBus
-from threadsafe_logger import sqlite_business_logger
+from python_pubsub_client import QueueWorkerThread, ServiceBus
+from async_threadsafe_logger import sqlite_business_logger
 
 from events import AnalysisConfigurationProvided, CalculateRSIRequested, RSICalculated
 from logger import logger
@@ -77,7 +77,6 @@ class RSICalculator(QueueWorkerThread):
                 logger.warning(
                     f"Skipping RSI calculation for {coin_id_symbol} ({timeframe}): "
                     f"insufficient or invalid data."
-
                 )
                 calculation_failed = True
 
@@ -98,7 +97,6 @@ class RSICalculator(QueueWorkerThread):
                     coin_id_symbol=coin_id_symbol,
                     rsi_series_json=rsi_json,
                     timeframe=timeframe
-
                 )
                 sqlite_business_logger.log(self.__class__.__name__, f"RSICalculated pour {coin_id_symbol}")
 
@@ -113,7 +111,6 @@ class RSICalculator(QueueWorkerThread):
                     "CoinProcessingFailed",
                     CoinProcessingFailed(coin_id_symbol=coin_id_symbol, timeframe=timeframe),
                     self.__class__.__name__
-
                 )
 
         except Exception as e:
@@ -129,5 +126,4 @@ class RSICalculator(QueueWorkerThread):
                     "CoinProcessingFailed",
                     CoinProcessingFailed(coin_id_symbol=coin_id_symbol, timeframe=timeframe),
                     self.__class__.__name__
-
                 )

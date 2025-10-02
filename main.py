@@ -1,7 +1,7 @@
 import uuid
 
 from pydantic import ValidationError
-from threadsafe_logger import sqlite_business_logger
+from async_threadsafe_logger import sqlite_business_logger
 
 from configuration import AnalysisConfig
 from crypto_analyzer import CryptoAnalyzer
@@ -23,7 +23,6 @@ if __name__ == "__main__":
                 timeframes=["1h", "1d"],
                 low_cap_percentile=25.0,
                 pubsub_url="http://localhost:5000",
-
             )
             logger.info("Configuration loaded and validated.")
         except ValidationError as e:

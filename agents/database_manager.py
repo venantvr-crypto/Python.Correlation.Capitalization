@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 # noinspection PyPackageRequirements
-from pubsub import QueueWorkerThread, ServiceBus
+from python_pubsub_client import QueueWorkerThread, ServiceBus
 
 from events import (
     AnalysisConfigurationProvided,
@@ -97,7 +97,6 @@ class DatabaseManager(QueueWorkerThread):
                     result["low_cap_quartile"],
                     self.session_guid,
                     event.timeframe,
-
                 )
                 self.add_task("_db_save_correlation", *task_args)
         except Exception as e:
@@ -138,10 +137,8 @@ class DatabaseManager(QueueWorkerThread):
                     max_supply REAL, ath REAL, ath_change_percentage REAL, ath_date TEXT, atl REAL,
                     atl_change_percentage REAL, atl_date TEXT, roi TEXT, last_updated TEXT,
                     PRIMARY KEY (coin_id, session_guid)
-
                 )
                 """
-
             )
             self.cursor.execute(
                 """
@@ -149,20 +146,16 @@ class DatabaseManager(QueueWorkerThread):
                     coin_id TEXT, coin_symbol TEXT, timestamp TIMESTAMP, session_guid TEXT,
                     open REAL, high REAL, low REAL, close REAL, volume REAL, timeframe TEXT,
                     PRIMARY KEY (coin_id, timestamp, session_guid, timeframe)
-
                 )
                 """
-
             )
             self.cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS rsi (
                     coin_id TEXT, coin_symbol TEXT, timestamp TIMESTAMP, session_guid TEXT, rsi REAL, timeframe TEXT,
                     PRIMARY KEY (coin_id, timestamp, session_guid, timeframe)
-
                 )
                 """
-
             )
             self.cursor.execute(
                 """
@@ -170,10 +163,8 @@ class DatabaseManager(QueueWorkerThread):
                     coin_id TEXT, coin_symbol TEXT, run_timestamp TIMESTAMP, session_guid TEXT,
                     correlation REAL, market_cap REAL, low_cap_quartile BOOLEAN, timeframe TEXT,
                     PRIMARY KEY (coin_id, run_timestamp, session_guid, timeframe)
-
                 )
                 """
-
             )
             self.cursor.execute(
                 """
@@ -183,10 +174,8 @@ class DatabaseManager(QueueWorkerThread):
                     min_qty REAL NOT NULL, tick_size REAL NOT NULL, min_notional REAL NOT NULL,
                     session_guid TEXT,
                     PRIMARY KEY (symbol, session_guid)
-
                 )
                 """
-
             )
             self.conn.commit()
         except Exception as e:
@@ -210,10 +199,8 @@ class DatabaseManager(QueueWorkerThread):
                     float(data.get("tick_size", "0")),
                     float(data.get("min_notional", "0")),
                     session_guid,
-
                 )
                 for data in precision_data
-
             ]
             if not data_to_insert:
                 return
@@ -222,7 +209,6 @@ class DatabaseManager(QueueWorkerThread):
                 INSERT OR IGNORE INTO precision_data (
                     symbol, quote_asset, base_asset, status, base_asset_precision,
                     step_size, min_qty, tick_size, min_notional, session_guid
-
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
             """
@@ -276,7 +262,6 @@ class DatabaseManager(QueueWorkerThread):
                 safe_float(coin.get('ath_change_percentage')), safe_str(coin.get('ath_date')),
                 safe_float(coin.get('atl')), safe_float(coin.get('atl_change_percentage')),
                 safe_str(coin.get('atl_date')), safe_str(coin.get('roi')), safe_str(coin.get('last_updated'))
-
             )
             self.cursor.execute('''
                 INSERT OR REPLACE INTO tokens (
@@ -285,7 +270,6 @@ class DatabaseManager(QueueWorkerThread):
                     price_change_percentage_24h, market_cap_change_24h, market_cap_change_percentage_24h,
                     circulating_supply, total_supply, max_supply, ath, ath_change_percentage,
                     ath_date, atl, atl_change_percentage, atl_date, roi, last_updated
-
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
@@ -307,7 +291,6 @@ class DatabaseManager(QueueWorkerThread):
             data_to_insert = [
                 (coin_id, coin_symbol, ts.isoformat(), session_guid, row.open, row.high, row.low, row.close, row.volume, timeframe)
                 for ts, row in prices_df.iterrows()
-
             ]
             if not data_to_insert:
                 return
@@ -336,7 +319,6 @@ class DatabaseManager(QueueWorkerThread):
             data_to_insert = [
                 (coin_id, coin_symbol, ts.to_pydatetime().isoformat(), session_guid, rsi_value, timeframe)
                 for ts, rsi_value in rsi_series.items() if not pd.isna(rsi_value)
-
             ]
             if not data_to_insert:
                 return

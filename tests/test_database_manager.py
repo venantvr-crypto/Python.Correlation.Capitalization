@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 # noinspection PyPackageRequirements
 import pytest
 
-from database_manager import DatabaseManager
+from agents.database_manager import DatabaseManager
 from events import AnalysisConfigurationProvided, SingleCoinFetched
 
 

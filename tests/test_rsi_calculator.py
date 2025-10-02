@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from events import AnalysisConfigurationProvided, RSICalculated, CalculateRSIRequested
-from rsi_calculator import RSICalculator
+from agents.rsi_calculator import RSICalculator
 
 
 # On utilise la fixture partagée de conftest.py

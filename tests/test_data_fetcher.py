@@ -3,7 +3,7 @@ from unittest.mock import ANY
 # noinspection PyPackageRequirements
 import pytest
 
-from data_fetcher import DataFetcher
+from agents.data_fetcher import DataFetcher
 # On importe tous les événements nécessaires pour le test
 from events import FetchTopCoinsRequested, AnalysisConfigurationProvided, TopCoinsFetched
 
