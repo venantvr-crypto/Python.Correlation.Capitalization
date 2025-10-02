@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 # noinspection PyPackageRequirements
 from python_pubsub_client import QueueWorkerThread, ServiceBus
-from async_threadsafe_logger import sqlite_business_logger
+from python_threadsafe_logger import sqlite_business_logger
 
 from events import AnalysisConfigurationProvided, CalculateRSIRequested, RSICalculated
 from logger import logger

@@ -1,7 +1,7 @@
 import uuid
 
 from pydantic import ValidationError
-from async_threadsafe_logger import sqlite_business_logger
+from python_threadsafe_logger import sqlite_business_logger
 
 from configuration import AnalysisConfig
 from crypto_analyzer import CryptoAnalyzer
