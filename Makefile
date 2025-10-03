@@ -1,6 +1,7 @@
 # ==============================================================================
 # Makefile pour l'Analyseur Crypto avec Pub/Sub externe
 # Inspiré par une structure client/serveur modulaire.
+# Version améliorée avec purge du venv.
 # ==============================================================================
 
 # --- Variables ---
@@ -10,7 +11,7 @@ PIP           := $(VENV_DIR)/bin/pip
 CLIENT_SCRIPT := main.py
 
 # --- Cibles Principales ---
-.PHONY: help all run run-server run-client stop-server force-update force-rebuild
+.PHONY: help all run run-server run-client stop-server force-update force-rebuild test clean
 
 # Tâche par défaut
 help:
@@ -25,12 +26,12 @@ help:
 	@echo "--- Gestion de l'Environnement ---"
 	@echo "  \033[0;33msetup\033[0m         : (Re)Crée l'environnement virtuel et installe toutes les dépendances."
 	@echo "  \033[0;33mforce-update\033[0m  : Force la mise à jour des dépendances du client."
-
+	@echo "  \033[0;33mforce-rebuild\033[0m : Force la reconstruction de l'image Docker sans cache."
 	@echo ""
 	@echo "--- Qualité du Code & Tests ---"
 	@echo "  \033[0;34mtest\033[0m          : Lance les tests unitaires avec pytest."
-	@echo "  \033[0;34mclean\033[0m         : Nettoie les fichiers temporaires et la base de données."
-	@echo "  \033[0;34mall\033[0m           : Nettoie, installe, formate, vérifie et teste le projet."
+	@echo "  \033[0;34mclean\033[0m         : Nettoie les fichiers temporaires, la DB ET l'environnement virtuel."
+	@echo "  \033[0;34mall\033[0m           : Nettoie, installe, et teste le projet."
 
 
 # --- Implémentation des Cibles ---
@@ -69,6 +70,21 @@ setup:
 	@$(PYTHON) -m pre_commit install
 	@echo "-> ✅ Environnement de développement prêt !"
 
+# Force la mise à jour des dépendances en utilisant le pip du venv
+force-update:
+	@echo "-> Nettoyage du cache pip..."
+	@$(PIP) cache purge
+	@echo "-> Mise à jour des dépendances client depuis requirements.txt..."
+	@$(PIP) install --no-cache-dir -r requirements.txt
+
+# Pour forcer la reconstruction sans utiliser le cache
+force-rebuild: stop-server
+	@echo "-> Lancement d'une reconstruction complète SANS CACHE..."
+	@docker compose build --no-cache
+	@echo "-> Lancement du serveur en arrière-plan..."
+	@docker compose up -d
+	@echo "-> Serveur lancé. Vous pouvez maintenant utiliser 'make run-client'."
+
 # Qualité du Code & Tests
 test:
 	@echo "-> Lancement des tests unitaires..."
@@ -81,21 +97,8 @@ clean:
 	@find . -type d -name '.pytest_cache' -exec rm -rf {} + 2>/dev/null || true
 	@find . -type d -name 'htmlcov' -exec rm -rf {} + 2>/dev/null || true
 	@rm -f crypto_data.db
-	@echo "-> ✅ Nettoyage terminé."
-
-# Force la mise à jour des dépendances en utilisant le pip du venv
-force-update:
-	@echo "-> Nettoyage du cache pip..."
-	@$(PIP) cache purge
-	@echo "-> Mise à jour des dépendances client depuis requirements.txt..."
-	@$(PIP) install --no-cache-dir -r requirements.txt
-
-# NOUVELLE CIBLE : Pour forcer la reconstruction sans utiliser le cache
-force-rebuild: stop-server
-	@echo "-> Lancement d'une reconstruction complète SANS CACHE..."
-	@docker compose build --no-cache
-	@echo "-> Lancement du serveur en arrière-plan..."
-	@docker compose up -d
-	@echo "-> Serveur lancé. Vous pouvez maintenant utiliser 'make run-client'."
+	@echo "-> Suppression de l'environnement virtuel..."
+	@rm -rf $(VENV_DIR)
+	@echo "-> ✅ Nettoyage complet terminé."
 
 all: clean setup test
