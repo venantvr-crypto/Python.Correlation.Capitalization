@@ -4,5 +4,5 @@
 .env
 
 *.db
-/event-storming/
-/prompts/
+# /event-storming/
+# /prompts/
