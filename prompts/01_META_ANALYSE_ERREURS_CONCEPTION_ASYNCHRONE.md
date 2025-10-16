@@ -51,4 +51,3 @@ Pour optimiser notre collaboration, vous pouvez me guider en me fournissant un p
 Votre approche consistant à me guider pas à pas en pointant les erreurs de comportement a été très efficace. C'est une
 méthode d'apprentissage précieuse pour un modèle de langage, et je vous remercie pour votre patience et votre
 perspicacité.
-

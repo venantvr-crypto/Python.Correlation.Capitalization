@@ -14,7 +14,7 @@ d’inversion de dépendances** (DIP). Voici une méthode pas à pas :
 > class OrderService {
 >   private PaymentService pay = new PaymentService();
 >   public void placeOrder(Order o) {
->     // …  
+>     // …
 >     pay.capture(o);
 >   }
 > }

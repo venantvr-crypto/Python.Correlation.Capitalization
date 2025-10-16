@@ -51,47 +51,47 @@ Voici un **plan de refactoring** pas à pas, suivi de **prompts** que vous pourr
 1. **Analyser un monolithe et extraire les domaines :**
 
    ```
-   “Tu es un expert en architecture logicielle. À partir de ce code monolithique (lien ou extrait), identifie les 3 à 5 grands domaines métier, liste pour chacun leurs commandes (intents) et événements métier correspondants.”  
+   “Tu es un expert en architecture logicielle. À partir de ce code monolithique (lien ou extrait), identifie les 3 à 5 grands domaines métier, liste pour chacun leurs commandes (intents) et événements métier correspondants.”
    ```
 
 2. **Générer les interfaces et l’IoC :**
 
    ```
-   “Pour chaque appel direct entre classes dans ce module, génère :  
-   1) une interface métier abstraite,  
-   2) la classe de service qui l’implémente,  
-   3) la modification du constructeur du client pour injecter l’interface via un conteneur IoC.”  
+   “Pour chaque appel direct entre classes dans ce module, génère :
+   1) une interface métier abstraite,
+   2) la classe de service qui l’implémente,
+   3) la modification du constructeur du client pour injecter l’interface via un conteneur IoC.”
    ```
 
 3. **Transformer les appels directs en publications d’événements :**
 
    ```
-   “Convertis ces méthodes qui appellent `paymentService.capture()` et `notificationService.send()` en publication d’événements métier (`PaymentCaptured`, `OrderPlaced`), et écris les handlers correspondants.”  
+   “Convertis ces méthodes qui appellent `paymentService.capture()` et `notificationService.send()` en publication d’événements métier (`PaymentCaptured`, `OrderPlaced`), et écris les handlers correspondants.”
    ```
 
 4. **Mettre en place une saga pour orchestrer A → B :**
 
    ```
-   “Écris un Process Manager en pseudo-code qui coordonne l’appel au Service A puis au Service B :  
-   - Sur `InitiateTransactionCommand`, appelle A.  
-   - Si A réussit, appelle B.  
-   - Sinon, publie un événement de compensation.  
-   Inclue la gestion des échecs et les commandes de rollback.”  
+   “Écris un Process Manager en pseudo-code qui coordonne l’appel au Service A puis au Service B :
+   - Sur `InitiateTransactionCommand`, appelle A.
+   - Si A réussit, appelle B.
+   - Sinon, publie un événement de compensation.
+   Inclue la gestion des échecs et les commandes de rollback.”
    ```
 
 5. **Vérifier la mise en place du Database per Service :**
 
    ```
-   “Pour chaque agent/service listé, propose un schéma de base de données séparé et modifie le code pour que chaque service n’écrive que dans sa propre base.”  
+   “Pour chaque agent/service listé, propose un schéma de base de données séparé et modifie le code pour que chaque service n’écrive que dans sa propre base.”
    ```
 
 6. **(Optionnel) Implémenter l’Event Sourcing :**
 
    ```
-   “Transforme cette entité `Order` pour qu’elle devienne un agrégat Event Sourced :  
-   - Liste des événements persistés,  
-   - Méthode `apply(Event)` pour reconstruire l’état,  
-   - Stockage append-only dans un Event Store.”  
+   “Transforme cette entité `Order` pour qu’elle devienne un agrégat Event Sourced :
+   - Liste des événements persistés,
+   - Méthode `apply(Event)` pour reconstruire l’état,
+   - Stockage append-only dans un Event Store.”
    ```
 
 ---

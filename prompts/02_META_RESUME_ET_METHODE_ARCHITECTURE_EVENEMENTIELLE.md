@@ -71,4 +71,3 @@ De tout cela, une méthode de conception émergente peut être formulée :
    libre et réactif.
 6. **Points de synchronisation clairs** : Utilisez des mécanismes de synchronisation (`threading.Event`, `Queue`) pour
    signaler la fin des processus et permettre aux agents d'attendre les dépendances sans bloquer.
-

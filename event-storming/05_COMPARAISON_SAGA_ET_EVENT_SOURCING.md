@@ -123,4 +123,3 @@ Prenons l’exemple d’une commande et d’un paiement :
 
     1. **Sagas** pour la coordination et la résilience
     2. **Event Sourcing** pour la persistance et l’historique métier.
-
