@@ -38,22 +38,26 @@ qui s'abonne à l'événement `FinalResultsReady` sans modifier aucun autre comp
 
 ### Schéma du flux d'événements
 
-```
+```mermaid
+sequenceDiagram
+    participant main
+    participant CryptoAnalyzer
+    participant ServiceBus
+    participant DataFetcher
+    participant DisplayAgent
 
-1.  [main] -\> [CryptoAnalyzer] : Lancement
-2.  [CryptoAnalyzer] --RunAnalysisRequested--\> [ServiceBus]
-3.  [ServiceBus] --\> [CryptoAnalyzer] : Gestion de RunAnalysisRequested
-4.  [CryptoAnalyzer] --FetchTopCoins/FetchPrecisionData--\> [ServiceBus]
-5.  [ServiceBus] --\> [DataFetcher] : Récupération des données
-6.  [DataFetcher] --TopCoinsFetched/PrecisionDataFetched--\> [ServiceBus]
-7.  [ServiceBus] --\> [CryptoAnalyzer] : Traitement des données initiales
-8.  ... Le cycle continue avec la récupération des prix, le calcul du RSI, et l'analyse des corrélations.
-9.  [CryptoAnalyzer] --FinalResultsReady--\> [ServiceBus]
-10. [ServiceBus] --\> [DisplayAgent] : Affichage des résultats
-11. [DisplayAgent] --DisplayCompleted--\> [ServiceBus]
-12. [ServiceBus] --\> [CryptoAnalyzer] : Signal de fin, arrêt du programme.
-
-
+    main->>CryptoAnalyzer: Lancement
+    CryptoAnalyzer->>ServiceBus: RunAnalysisRequested
+    ServiceBus->>CryptoAnalyzer: Gestion de RunAnalysisRequested
+    CryptoAnalyzer->>ServiceBus: FetchTopCoins / FetchPrecisionData
+    ServiceBus->>DataFetcher: Récupération des données
+    DataFetcher->>ServiceBus: TopCoinsFetched / PrecisionDataFetched
+    ServiceBus->>CryptoAnalyzer: Traitement des données initiales
+    Note over CryptoAnalyzer,DataFetcher: Le cycle continue avec prix, RSI et corrélations
+    CryptoAnalyzer->>ServiceBus: FinalResultsReady
+    ServiceBus->>DisplayAgent: Affichage des résultats
+    DisplayAgent->>ServiceBus: DisplayCompleted
+    ServiceBus->>CryptoAnalyzer: Signal de fin
 ```
 
 ## Structure du Projet
