@@ -229,3 +229,7 @@ L'architecture est l'un des points forts de ce code. Elle est conçue autour d'u
 * **Robustesse** : L'utilisation de `tenacity` pour les appels réseau et la gestion des erreurs (ex: `CoinProcessingFailed`) rendent le script plus résistant aux pannes.
 * **Configuration Centralisée** : `AnalysisConfig` permet de modifier facilement les paramètres de l'analyse sans toucher au code principal.
 * **Persistance des Données** : Tout est sauvegardé dans une base de données SQLite, ce qui permet une analyse post-mortem ou la réutilisation des données.
+
+## Stack
+
+[![Stack](https://skillicons.dev/icons?i=py,sqlite,git&theme=dark)](https://skillicons.dev)
