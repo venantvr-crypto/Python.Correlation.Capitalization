@@ -232,4 +232,4 @@ L'architecture est l'un des points forts de ce code. Elle est conçue autour d'u
 
 ## Stack
 
-[![Stack](https://skillicons.dev/icons?i=py,sqlite,git&theme=dark)](https://skillicons.dev)
+[![Stack](https://skillicons.dev/icons?i=py,sqlite&theme=dark)](https://skillicons.dev)
