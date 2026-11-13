@@ -1,5 +1,3 @@
-from typing import Optional
-
 # noinspection PyPackageRequirements
 from python_pubsub_client import QueueWorkerThread, ServiceBus
 
@@ -19,48 +17,36 @@ BOLD_WHITE = "\033[1;97m"
 CYAN = "\033[96m"
 
 
-# --- End of color codes ---
-
-
 class DisplayAgent(QueueWorkerThread):
     """Agent responsible for displaying final results in its own thread."""
 
-    def __init__(self, service_bus: Optional[ServiceBus] = None):
+    def __init__(self, service_bus: ServiceBus | None = None):
         super().__init__(service_bus=service_bus, name="DisplayAgent")
-        self.session_guid: Optional[str] = None
+        self.session_guid: str | None = None
 
     def setup_event_subscriptions(self) -> None:
         self.service_bus.subscribe("AnalysisConfigurationProvided", self._handle_configuration_provided)
         self.service_bus.subscribe("FinalResultsReady", self._handle_final_results_ready)
 
-    def _handle_configuration_provided(self, event: AnalysisConfigurationProvided):
+    def _handle_configuration_provided(self, event: AnalysisConfigurationProvided) -> None:
+        self.session_guid = event.session_guid
+        logger.info(f"{BLACK_ON_YELLOW}DisplayAgent{RESET} received configuration for session {BOLD_WHITE}{self.session_guid}{RESET}.")
 
-        try:
-            self.session_guid = event.session_guid
-            logger.info(
-                f"{BLACK_ON_YELLOW}DisplayAgent{RESET} received configuration for session {BOLD_WHITE}{self.session_guid}{RESET}."
-            )
-        except Exception as e:
-            error_msg = f"Error handling configuration provided: {e}"
-            logger.critical(error_msg, exc_info=True)
+    def _handle_final_results_ready(self, event: FinalResultsReady) -> None:
+        self.add_task("_display_results_and_publish", event)
 
-    def _handle_final_results_ready(self, event: FinalResultsReady):
-
-        try:
-            self.add_task("_display_results_and_publish", event)
-        except Exception as e:
-            error_msg = f"Error handling final results ready: {e}"
-            logger.critical(error_msg, exc_info=True)
-
-    def _display_results_and_publish(self, event: FinalResultsReady):
+    def _display_results_and_publish(self, event: FinalResultsReady) -> None:
         """Method that displays results and publishes the completion event."""
-        self._display_results(event)
 
-        if self.service_bus is not None:
-            self.service_bus.publish("DisplayCompleted", DisplayCompleted(), self.__class__.__name__)
+        try:
+            self._display_results(event)
+        finally:
+            # Always signal completion, otherwise the orchestrator would wait forever.
+            if self.service_bus is not None:
+                self.service_bus.publish("DisplayCompleted", DisplayCompleted(), self.__class__.__name__)
 
     @staticmethod
-    def _display_results(event: FinalResultsReady):
+    def _display_results(event: FinalResultsReady) -> None:
         results = sorted(event.results, key=lambda x: (-abs(x.get("correlation", 0)), x.get("market_cap", 0)))
         timeframes_str = ", ".join(event.timeframes)
 

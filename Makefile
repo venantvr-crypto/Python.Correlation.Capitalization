@@ -11,7 +11,7 @@ PIP           := $(VENV_DIR)/bin/pip
 CLIENT_SCRIPT := main.py
 
 # --- Cibles Principales ---
-.PHONY: help all run run-server run-client stop-server force-update force-rebuild test clean
+.PHONY: help all run run-server run-client run-quick stop-server setup force-update force-rebuild lint test clean
 
 # Tâche par défaut
 help:
@@ -21,6 +21,7 @@ help:
 	@echo "  \033[0;32mrun\033[0m          : Lance le serveur en arrière-plan puis le client (tout-en-un)."
 	@echo "  \033[0;32mrun-server\033[0m  : Lance UNIQUEMENT le serveur Docker en avant-plan."
 	@echo "  \033[0;32mrun-client\033[0m  : Lance UNIQUEMENT le client Python (nécessite que le serveur tourne)."
+	@echo "  \033[0;32mrun-quick\033[0m   : Lance le client avec une configuration réduite (2 semaines, 10 cryptos, 1h)."
 	@echo "  \033[0;32mstop-server\033[0m   : Arrête et supprime le conteneur du serveur Docker."
 	@echo ""
 	@echo "--- Gestion de l'Environnement ---"
@@ -29,6 +30,7 @@ help:
 	@echo "  \033[0;33mforce-rebuild\033[0m : Force la reconstruction de l'image Docker sans cache."
 	@echo ""
 	@echo "--- Qualité du Code & Tests ---"
+	@echo "  \033[0;34mlint\033[0m          : Vérifie le code avec ruff."
 	@echo "  \033[0;34mtest\033[0m          : Lance les tests unitaires avec pytest."
 	@echo "  \033[0;34mclean\033[0m         : Nettoie les fichiers temporaires, la DB ET l'environnement virtuel."
 	@echo "  \033[0;34mall\033[0m           : Nettoie, installe, et teste le projet."
@@ -54,6 +56,10 @@ run-client:
 	@echo "-> Lancement du client d'analyse crypto..."
 	@$(PYTHON) $(CLIENT_SCRIPT)
 
+run-quick:
+	@echo "-> Lancement du client en configuration réduite..."
+	@$(PYTHON) $(CLIENT_SCRIPT) --weeks 2 --top-n-coins 10 --correlation-threshold 0.5 --timeframes 1h
+
 stop-server:
 	@echo "-> Arrêt et suppression du conteneur du serveur Pub/Sub..."
 	@docker compose down --rmi local 2>/dev/null || true
@@ -62,9 +68,7 @@ stop-server:
 setup:
 	@echo "-> Création de l'environnement virtuel dans [$(VENV_DIR)]..."
 	@python3 -m venv $(VENV_DIR)
-	@echo "-> Installation des dépendances de production..."
-	@$(PIP) install -r requirements.txt
-	@echo "-> Installation des dépendances de développement..."
+	@echo "-> Installation des dépendances de production et de développement..."
 	@$(PIP) install -r requirements-dev.txt
 	@echo "-> Installation des hooks pre-commit..."
 	@$(PYTHON) -m pre_commit install
@@ -86,6 +90,10 @@ force-rebuild: stop-server
 	@echo "-> Serveur lancé. Vous pouvez maintenant utiliser 'make run-client'."
 
 # Qualité du Code & Tests
+lint:
+	@echo "-> Vérification du code avec ruff..."
+	@$(PYTHON) -m ruff check .
+
 test:
 	@echo "-> Lancement des tests unitaires..."
 	@$(PYTHON) -m pytest tests -v --tb=short
@@ -94,11 +102,11 @@ clean:
 	@echo "-> Nettoyage des fichiers temporaires..."
 	@find . -type f -name '*.pyc' -delete
 	@find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
-	@find . -type d -name '.pytest_cache' -exec rm -rf {} + 2>/dev/null || true
+	@find . -type d \( -name '.pytest_cache' -o -name '.ruff_cache' \) -exec rm -rf {} + 2>/dev/null || true
 	@find . -type d -name 'htmlcov' -exec rm -rf {} + 2>/dev/null || true
 	@rm -f crypto_data.db
 	@echo "-> Suppression de l'environnement virtuel..."
 	@rm -rf $(VENV_DIR)
 	@echo "-> ✅ Nettoyage complet terminé."
 
-all: clean setup test
+all: clean setup lint test
