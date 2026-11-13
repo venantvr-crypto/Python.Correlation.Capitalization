@@ -1,9 +1,18 @@
+import importlib.util
+import sys
 from unittest.mock import MagicMock
 
 # noinspection PyPackageRequirements
 import pytest
 
 from configuration import AnalysisConfig
+
+# `python_pubsub_client` importe ce module (proxys DevTools) dès son chargement. Les tests ne s'en
+# servent pas : on le remplace par un mock s'il n'est pas installé, pour ne pas en dépendre.
+DEVTOOLS_MODULE = "python_pubsub_devtools_consumers"
+
+if importlib.util.find_spec(DEVTOOLS_MODULE) is None:
+    sys.modules[DEVTOOLS_MODULE] = MagicMock()
 
 
 @pytest.fixture
