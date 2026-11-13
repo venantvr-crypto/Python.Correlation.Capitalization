@@ -15,5 +15,9 @@ def mock_service_bus():
 @pytest.fixture
 def analysis_config():
     """Fixture pour fournir une configuration d'analyse standard."""
-    # noinspection PyArgumentList
     return AnalysisConfig(weeks=4, top_n_coins=10, rsi_period=14)
+
+
+def published_events(service_bus, event_name: str) -> list:
+    """Retourne les payloads publiés sur le bus mocké pour un nom d'événement donné."""
+    return [call.args[1] for call in service_bus.publish.call_args_list if call.args[0] == event_name]

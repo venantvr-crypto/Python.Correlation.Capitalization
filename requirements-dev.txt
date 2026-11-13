@@ -16,3 +16,4 @@ types-requests~=2.32.0
 
 # Development tools
 pre-commit~=4.0.1
+ruff>=0.17

@@ -63,81 +63,77 @@ sequenceDiagram
 ## Structure du Projet
 
 ```
-
 .
-├── main.py                     \# Point d'entrée de l'application. Configure et lance l'analyse.
-├── crypto\_analyzer.py          \# Orchestrateur principal de l'analyse.
-├── configuration.py            \# Contient la classe de configuration `AnalysisConfig`.
-├── service\_bus.py              \# Implémentation du bus de services événementiel.
-├── events.py                   \# Définition de tous les événements (dataclasses) utilisés dans l'application.
-├── data\_fetcher.py             \# Service pour récupérer les données depuis les APIs externes.
-├── rsi\_calculator.py           \# Service pour calculer le RSI.
-├── database\_manager.py         \# Service pour gérer la base de données SQLite.
-├── display\_agent.py            \# Service pour afficher les résultats finaux.
-├── analysis\_job.py             \# Classe qui gère l'état d'une analyse pour un seul timeframe.
-└── logger.py                   \# Configuration du logging.
+├── main.py                 # Point d'entrée : lit les arguments, valide la configuration, lance l'analyse.
+├── crypto_analyzer.py      # Orchestrateur principal de l'analyse.
+├── analysis_job.py         # État d'une analyse pour un seul timeframe.
+├── configuration.py        # Classe de configuration `AnalysisConfig`.
+├── events.py               # Définition de tous les événements (modèles Pydantic immuables).
+├── serialization.py        # (Dé)sérialisation JSON des DataFrames/Series transportés par les événements.
+├── logger.py               # Configuration du logging.
+├── agents/
+│   ├── data_fetcher.py     # Récupère les données depuis CoinGecko et Binance.
+│   ├── rsi_calculator.py   # Calcule le RSI.
+│   ├── database_manager.py # Persiste les données dans SQLite.
+│   └── display_agent.py    # Affiche les résultats finaux.
+├── tests/                  # Tests unitaires (pytest).
+└── pyproject.toml          # Configuration de pytest et ruff.
+```
 
-````
+Le bus de services (`ServiceBus`) et les classes de base des agents viennent de la librairie externe `python_pubsub_client`.
 
 ## Prérequis
 
-- Python 3.8+
-- Les dépendances listées dans `requirements.txt`.
+- Python 3.12+
+- Docker (pour le serveur Pub/Sub lancé par `make run`)
+- Les dépendances listées dans `requirements.txt` (et `requirements-dev.txt` pour le développement).
 
 ## Installation
 
-1. Clonez le dépôt :
-   ```sh
-   git clone <url-du-repo>
-   cd <nom-du-repo>
-   ```
-
-2. Il est recommandé de créer et d'activer un environnement virtuel :
-   ```sh
-   python -m venv venv
-   source venv/bin/activate  # Sur Windows: venv\Scripts\activate
-   ```
-
-3. Installez les dépendances. Créez un fichier `requirements.txt` avec le contenu suivant :
-   ```txt
-   pandas
-   pycoingecko
-   ccxt
-   tenacity
-   numpy
-   ```
-   Puis installez-le :
-   ```sh
-   pip install -r requirements.txt
-   ```
+```sh
+git clone <url-du-repo>
+cd <nom-du-repo>
+make setup    # crée .venv, installe les dépendances et les hooks pre-commit
+```
 
 ## Configuration
 
-Tous les paramètres de l'analyse peuvent être modifiés directement dans le fichier `main.py` au sein de l'objet `AnalysisConfig`.
+Les paramètres de l'analyse se passent en ligne de commande (`python main.py --help`). Ils sont validés par `AnalysisConfig`.
 
-```python
-# main.py
-
-analysis_config = AnalysisConfig(
-    weeks=50,  # Nombre de semaines de données historiques à analyser.
-    top_n_coins=5000,  # Nombre de top cryptos à considérer (par capitalisation).
-    correlation_threshold=0.7,  # Seuil minimum de corrélation pour afficher un résultat.
-    rsi_period=14,  # Période pour le calcul du RSI (standard = 14).
-    timeframes=['1h', '1d'],  # Liste des unités de temps à analyser.
-    low_cap_percentile=25.0  # Percentile pour définir une "faible capitalisation".
-    # (25.0 = le 25% des cryptos avec la plus faible capitalisation).
-)
-````
+| Option                    | Défaut                  | Rôle                                                   |
+|---------------------------|-------------------------|--------------------------------------------------------|
+| `--weeks`                 | `50`                    | Nombre de semaines de données historiques à analyser.  |
+| `--top-n-coins`           | `1000`                  | Nombre de top cryptos à considérer (par capitalisation). |
+| `--correlation-threshold` | `0.7`                   | Seuil minimum de corrélation pour retenir un résultat. |
+| `--rsi-period`            | `14`                    | Période pour le calcul du RSI.                         |
+| `--timeframes`            | `1h 1d`                 | Unités de temps à analyser.                            |
+| `--low-cap-percentile`    | `25.0`                  | Percentile définissant une "faible capitalisation".    |
+| `--pubsub-url`            | `http://localhost:5000` | URL du serveur Pub/Sub.                                |
 
 ## Utilisation
 
-Pour lancer une session d'analyse, exécutez simplement le script `main.py` :
+```sh
+make run          # lance le serveur Pub/Sub (Docker), puis l'analyse, puis arrête le serveur
+make run-client   # lance uniquement l'analyse (le serveur doit déjà tourner)
+make run-quick    # analyse réduite (2 semaines, 10 cryptos, 1h) pour un essai rapide
+```
+
+Ou directement, avec vos propres paramètres :
 
 ```sh
-python main.py
+python main.py --weeks 12 --top-n-coins 200 --timeframes 1d
 ```
 
 L'application affichera des logs en temps réel sur sa progression. À la fin, elle affichera un résumé des cryptomonnaies qui correspondent aux critères de sélection.
+
+## Développement
+
+```sh
+make lint   # ruff
+make test   # pytest
+```
+
+Les mêmes vérifications tournent dans la CI GitHub Actions (`.github/workflows/ci.yml`).
 
 ## Sortie
 
